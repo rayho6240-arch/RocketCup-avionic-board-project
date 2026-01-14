@@ -2751,7 +2751,7 @@
 		)
 	)
 	(sheet
-		(at 16.51 135.89)
+		(at 19.05 129.54)
 		(size 31.75 15.24)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2767,7 +2767,7 @@
 		)
 		(uuid "5c978dc4-ee7e-4ac9-b4f9-4af5254aab91")
 		(property "Sheetname" "ElectricPowerSystem"
-			(at 16.51 135.1784 0)
+			(at 19.05 128.8284 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2776,7 +2776,7 @@
 			)
 		)
 		(property "Sheetfile" "ElectricPowerSysrem/ElectricPowerSysrem.kicad_sch"
-			(at 16.51 151.7146 0)
+			(at 19.05 145.3646 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2793,7 +2793,7 @@
 		)
 	)
 	(sheet
-		(at 16.51 179.07)
+		(at 19.05 172.72)
 		(size 31.75 13.97)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2809,7 +2809,7 @@
 		)
 		(uuid "64776dc1-2ecb-4a84-b8c2-21a5abf29ea2")
 		(property "Sheetname" "BackupSystem"
-			(at 16.51 178.3584 0)
+			(at 19.05 172.0084 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2818,7 +2818,7 @@
 			)
 		)
 		(property "Sheetfile" "BackupSystem/BackupSystem.kicad_sch"
-			(at 16.51 193.6246 0)
+			(at 19.05 187.2746 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2835,7 +2835,7 @@
 		)
 	)
 	(sheet
-		(at 16.51 156.21)
+		(at 19.05 149.86)
 		(size 31.75 15.24)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2851,7 +2851,7 @@
 		)
 		(uuid "6dad062f-ca5e-41b0-9274-f99637a0e197")
 		(property "Sheetname" "Storage"
-			(at 16.51 155.4984 0)
+			(at 19.05 149.1484 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2860,7 +2860,7 @@
 			)
 		)
 		(property "Sheetfile" "Storage/Storage.kicad_sch"
-			(at 16.51 172.0346 0)
+			(at 19.05 165.6846 0)
 			(effects
 				(font
 					(size 1.27 1.27)
