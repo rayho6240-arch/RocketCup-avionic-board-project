@@ -1,0 +1,24 @@
+# --- KiCad 核心忽略項目 ---
+*.bak
+*.bkp
+*_backups/
+*.tmp
+*.kicad_prl   # 個人視窗設定 (重要！每個人螢幕不同，不傳這個)
+*.kicad_user  # 個人偏好設定
+fp-info-cache # Footprint 快取
+
+# --- 輸出檔案 (通常不進版控，除非您想直接在 GitHub 看 Gerber) ---
+gbers/
+plots/
+*.net
+*.xml
+*.csv
+*.gbr
+*.drl
+
+# --- 作業系統產生的垃圾檔 ---
+.DS_Store     # macOS 常見
+Thumbs.db     # Windows 常見
+
+# --- 編輯器設定 (選用) ---
+.vscode/      # 如果你們用 VS Code 寫 code，這個資料夾通常是個人設定
