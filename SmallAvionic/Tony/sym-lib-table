@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "Small_av_tony_lib")(type "KiCad")(uri "${KIPRJMOD}/Small_av_tony_lib.kicad_sym")(options "")(descr ""))
+)
