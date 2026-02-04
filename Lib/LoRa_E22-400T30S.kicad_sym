@@ -1,0 +1,262 @@
+(kicad_symbol_lib
+	(version 20241209)
+	(generator "kicad_symbol_editor")
+	(generator_version "9.0")
+	(symbol "E22-400T30S"
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "U"
+			(at 17.78 21.59 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "E22-400T30S_0_1"
+			(rectangle
+				(start 35.56 19.05)
+				(end 35.56 19.05)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+		)
+		(symbol "E22-400T30S_1_1"
+			(rectangle
+				(start 11.43 -2.54)
+				(end 26.67 -20.32)
+				(stroke
+					(width 0)
+					(type solid)
+				)
+				(fill
+					(type color)
+					(color 255 255 194 1)
+				)
+			)
+			(pin input line
+				(at 8.89 -5.08 0)
+				(length 2.54)
+				(name "AUX"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 8.89 -7.62 0)
+				(length 2.54)
+				(name "NRST"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 8.89 -10.16 0)
+				(length 2.54)
+				(name "GMD"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 8.89 -12.7 0)
+				(length 2.54)
+				(name "VCC"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 8.89 -15.24 0)
+				(length 2.54)
+				(name "GND"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 29.21 -5.08 180)
+				(length 2.54)
+				(name "ANT"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 29.21 -7.62 180)
+				(length 2.54)
+				(name "TXD"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 29.21 -10.16 180)
+				(length 2.54)
+				(name "RXD"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 29.21 -12.7 180)
+				(length 2.54)
+				(name "MO"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 29.21 -15.24 180)
+				(length 2.54)
+				(name "M1"
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+				(number ""
+					(effects
+						(font
+							(size 0.762 0.762)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+)
