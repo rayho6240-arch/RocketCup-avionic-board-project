@@ -412,50 +412,6 @@
     [
       "80a059dc-2311-4dd3-afad-18a5367fc218",
       "Root"
-    ],
-    [
-      "cac259dc-0b2d-474e-9c43-3fcc01804499",
-      "BaroMeter"
-    ],
-    [
-      "552b88c3-33a2-45eb-88b9-7beeafb9eb28",
-      "HighAccelerationMeter"
-    ],
-    [
-      "9c98e7af-c830-42bc-892f-16387390477a",
-      "IMU"
-    ],
-    [
-      "b5674e7e-f634-4b3f-90ba-7d2dfdd8738e",
-      "MegnetoMeter"
-    ],
-    [
-      "8b275466-b220-4f58-9af1-a824cc4e7f7d",
-      "GPS"
-    ],
-    [
-      "84830b64-7a26-4fb2-9135-14230879bc82",
-      "Transceiver_LoRa2"
-    ],
-    [
-      "0c895dcd-02fb-4cd6-8949-0103dfee9f7d",
-      "Transceiver_LoRa1"
-    ],
-    [
-      "2bfde489-8416-4413-b989-726deb9c51a5",
-      "VideoSystem"
-    ],
-    [
-      "5c978dc4-ee7e-4ac9-b4f9-4af5254aab91",
-      "ElectricPowerSystem"
-    ],
-    [
-      "6dad062f-ca5e-41b0-9274-f99637a0e197",
-      "Storage"
-    ],
-    [
-      "64776dc1-2ecb-4a84-b8c2-21a5abf29ea2",
-      "BackupSystem"
     ]
   ],
   "text_variables": {}
