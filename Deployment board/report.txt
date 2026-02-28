@@ -1,0 +1,111 @@
+資訊: 正在處理符號 'C1:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'J4:'。
+資訊: 正在處理符號 'D6:'。
+資訊: 正在處理符號 'D5:'。
+資訊: 正在處理符號 'C2:Capacitor_THT:C_Radial_D18.0mm_H35.5mm_P7.50mm'。
+資訊: 正在處理符號 'D2:Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder'。
+資訊: 正在處理符號 'D3:'。
+資訊: 正在處理符號 'D1:Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder'。
+資訊: 正在處理符號 'F1:'。
+資訊: 正在處理符號 'D4:'。
+資訊: 正在處理符號 'GND1:'。
+資訊: 正在處理符號 'J1:'。
+資訊: 正在處理符號 'J2:'。
+資訊: 正在處理符號 'J3:'。
+資訊: 正在處理符號 'J5:'。
+資訊: 正在處理符號 'M1:'。
+資訊: 正在處理符號 'Q1:'。
+資訊: 正在處理符號 'Q2:'。
+資訊: 正在處理符號 'Q3:Package_TO_SOT_SMD:SOT-23'。
+資訊: 正在處理符號 'R1:'。
+資訊: 正在處理符號 'R2:'。
+資訊: 總計警告: 0, 錯誤: 22。
+資訊: 正在處理符號 'R3:Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder'。
+資訊: 正在處理符號 'R4:'。
+資訊: 正在處理符號 'R5:'。
+資訊: 正在處理符號 'R6:'。
+資訊: 正在處理符號 'R7:'。
+資訊: 正在處理符號 'SW1:'。
+資訊: 正在處理符號 'V_D_BAT+1:'。
+已將 C2 封裝篩選器更新為 'C_*'。
+將 C2 接腳 1 連接到了 V_Ｄ_BAT+。
+將 C2 接腳 2 連接到了 GND。
+添加了 D1 (封裝 'Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder')。
+已將 REF** 的參考位置更改為 D1。
+已將 D1 的值從 'D_0805_2012Metric_Pad1.15x1.40mm_HandSolder' 修改為 'D_Schottky'。
+將 D1 符號分配從  更新到 /afddf6cc-838e-4f23-90be-1837a1aae5c3。
+已更新 D1 個欄位。
+已將 D1 圖紙名稱更新為 '/'。
+已將 D1 圖紙檔案更新為 'Deployment board.kicad_sch'。
+已將 D1 封裝篩選器更新為 'TO-???* *_Diode_* *SingleDiode* D_*'。
+添加網路 Net-(D1-K)。
+將 D1 接腳 1 連接到了 Net-(D1-K)。
+添加網路 Main_AV_PWM_Servo。
+將 D1 接腳 2 連接到了 Main_AV_PWM_Servo。
+添加了 D2 (封裝 'Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder')。
+已將 REF** 的參考位置更改為 D2。
+已將 D2 的值從 'D_0805_2012Metric_Pad1.15x1.40mm_HandSolder' 修改為 'D_Schottky'。
+已更新 D2 個欄位。
+已將 D2 圖紙名稱更新為 '/'。
+已將 D2 圖紙檔案更新為 'Deployment board.kicad_sch'。
+已將 D2 封裝篩選器更新為 'TO-???* *_Diode_* *SingleDiode* D_*'。
+將 D2 接腳 1 連接到了 Net-(D1-K)。
+添加網路 Backup_AV_PWM_Servo。
+將 D2 接腳 2 連接到了 Backup_AV_PWM_Servo。
+將 D2 符號分配從  更新到 /3689029c-2b9c-4e80-b576-72a362e14549。
+添加了 C1 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C1。
+已將 C1 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C1 符號分配從  更新到 /8f363f78-229f-41fa-81e6-f160d2b571a7。
+已更新 C1 個欄位。
+已將 C1 圖紙名稱更新為 '/'。
+已將 C1 圖紙檔案更新為 'Deployment board.kicad_sch'。
+已將 C1 封裝篩選器更新為 'C_*'。
+添加網路 GND。
+將 C1 接腳 2 連接到了 GND。
+添加網路 V_Ｄ_BAT+。
+將 C1 接腳 1 連接到了 V_Ｄ_BAT+。
+添加了 C2 (封裝 'Capacitor_THT:C_Radial_D18.0mm_H35.5mm_P7.50mm')。
+添加了 R3 (封裝 'Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder')。
+已將 REF** 的參考位置更改為 R3。
+已將 R3 的值從 'R_0805_2012Metric_Pad1.20x1.40mm_HandSolder' 修改為 '1k'。
+將 R3 符號分配從  更新到 /a728b347-bfb4-432d-a141-ddc5c2a8a8d3。
+已更新 R3 個欄位。
+已將 R3 圖紙名稱更新為 '/'。
+已將 R3 圖紙檔案更新為 'Deployment board.kicad_sch'。
+已將 R3 封裝篩選器更新為 'R_*'。
+將 R3 接腳 1 連接到了 Net-(D1-K)。
+將 R3 接腳 2 連接到了 GND。
+已將 REF** 的參考位置更改為 C2。
+已將 C2 的值從 'C_Radial_D18.0mm_H35.5mm_P7.50mm' 修改為 '1000u'。
+將 C2 符號分配從  更新到 /1a8924d4-40a4-46ed-bfbd-bdd772b5f900。
+已更新 C2 個欄位。
+已將 C2 圖紙名稱更新為 '/'。
+已將 C2 圖紙檔案更新為 'Deployment board.kicad_sch'。
+
+
+錯誤: 無法添加 GND1 (沒有分配封裝)。
+錯誤: 無法添加 M1 (沒有分配封裝)。
+錯誤: 無法添加 D6 (沒有分配封裝)。
+錯誤: 無法添加 Q1 (沒有分配封裝)。
+錯誤: 無法添加 J1 (沒有分配封裝)。
+錯誤: 無法添加 Q2 (沒有分配封裝)。
+錯誤: 無法添加 D3 (沒有分配封裝)。
+錯誤: 無法添加 J2 (沒有分配封裝)。
+錯誤: 無法添加 R2 (沒有分配封裝)。
+錯誤: 無法添加 R1 (沒有分配封裝)。
+錯誤: 無法添加 R5 (沒有分配封裝)。
+錯誤: 無法添加 F1 (沒有分配封裝)。
+錯誤: 無法添加 R6 (沒有分配封裝)。
+錯誤: 無法添加 J3 (沒有分配封裝)。
+錯誤: 無法添加 R7 (沒有分配封裝)。
+錯誤: 無法添加 D5 (沒有分配封裝)。
+錯誤: 無法添加 SW1 (沒有分配封裝)。
+錯誤: 無法添加 J4 (沒有分配封裝)。
+錯誤: 無法添加 V_D_BAT+1 (沒有分配封裝)。
+錯誤: 無法添加 D4 (沒有分配封裝)。
+錯誤: 無法添加 J5 (沒有分配封裝)。
+錯誤: 無法添加 R4 (沒有分配封裝)。
+
+
+資訊: 總計警告: 0, 錯誤: 22。

@@ -1,0 +1,78 @@
+資訊: 正在處理符號 'BMP1:'。
+資訊: 正在處理符號 'LED1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:SMT-JUMPER_2_NC_TRACE_SILK'。
+資訊: 正在處理符號 'C1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+資訊: 正在處理符號 'R1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+資訊: 正在處理符號 'C2:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+資訊: 正在處理符號 'R2:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+資訊: 正在處理符號 'C3:'。
+資訊: 正在處理符號 'R3:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+資訊: 正在處理符號 'C4:'。
+資訊: 正在處理符號 'D2:'。
+資訊: 正在處理符號 'C5:'。
+資訊: 正在處理符號 'R5:'。
+資訊: 正在處理符號 'C6:'。
+資訊: 正在處理符號 'R6:Adafruit BMP390:0603-NO'。
+資訊: 正在處理符號 'C7:'。
+資訊: 正在處理符號 'R7:Adafruit BMP390:0603-NO'。
+資訊: 正在處理符號 'D1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:LED-0402'。
+資訊: 正在處理符號 'SJ1:Adafruit BMP390:SOLDERJUMPER_ARROW_NOPASTE'。
+資訊: 正在處理符號 'TP1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03'。
+資訊: 正在處理符號 'TP2:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03'。
+資訊: 正在處理符號 'D3:Adafruit BMP390:SOD-323'。
+資訊: 正在處理符號 'TP3:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03'。
+資訊: 正在處理符號 'I2C_PU1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:SMT-JUMPER_3_2-NC_TRACE_SILK'。
+資訊: 正在處理符號 'TP4:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03'。
+資訊: 正在處理符號 'IC1:Adafruit BMP390:BMP388'。
+資訊: 正在處理符號 'U1:Package_QFP:LQFP-48_7x7mm_P0.5mm'。
+資訊: 正在處理符號 'J1:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:1X01_1MM_NO_SILK'。
+資訊: 正在處理符號 'U2:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:LGA-16-3X3MM-4X4PINS'。
+資訊: 正在處理符號 'J2:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:1X01_1MM_NO_SILK'。
+資訊: 正在處理符號 'U3:'。
+資訊: 正在處理符號 'J3:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:JST04_1MM_RA'。
+資訊: 正在處理符號 'U4:'。
+資訊: 正在處理符號 'JP1:'。
+資訊: 正在處理符號 'U5:Package_SON:WSON-8-1EP_8x6mm_P1.27mm_EP3.4x4.3mm'。
+資訊: 正在處理符號 'JP2:'。
+資訊: 總計警告: 0, 錯誤: 35。
+資訊: 正在處理符號 'JP3:'。
+資訊: 正在處理符號 'R4:SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT'。
+
+
+錯誤: 無法添加 C2 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 C3 (沒有分配封裝)。
+錯誤: 無法添加 C5 (沒有分配封裝)。
+錯誤: 無法添加 C6 (沒有分配封裝)。
+錯誤: 無法添加 C7 (沒有分配封裝)。
+錯誤: 無法添加 D1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:LED-0402')。
+錯誤: 無法添加 C4 (沒有分配封裝)。
+錯誤: 無法添加 D2 (沒有分配封裝)。
+錯誤: 無法添加 D3 (找不到封裝 'Adafruit BMP390:SOD-323')。
+錯誤: 無法添加 I2C_PU1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:SMT-JUMPER_3_2-NC_TRACE_SILK')。
+錯誤: 無法添加 IC1 (找不到封裝 'Adafruit BMP390:BMP388')。
+錯誤: 無法添加 J1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:1X01_1MM_NO_SILK')。
+錯誤: 無法添加 J2 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:1X01_1MM_NO_SILK')。
+錯誤: 無法添加 J3 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:JST04_1MM_RA')。
+錯誤: 無法添加 JP1 (沒有分配封裝)。
+錯誤: 無法添加 JP2 (沒有分配封裝)。
+錯誤: 無法添加 JP3 (沒有分配封裝)。
+錯誤: 無法添加 TP1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03')。
+錯誤: 無法添加 R4 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 TP2 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03')。
+錯誤: 無法添加 LED1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:SMT-JUMPER_2_NC_TRACE_SILK')。
+錯誤: 無法添加 TP3 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03')。
+錯誤: 無法添加 R5 (沒有分配封裝)。
+錯誤: 無法添加 TP4 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:PAD.03X.03')。
+錯誤: 無法添加 R2 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 R6 (找不到封裝 'Adafruit BMP390:0603-NO')。
+錯誤: 無法添加 U2 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:LGA-16-3X3MM-4X4PINS')。
+錯誤: 無法添加 R1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 U3 (沒有分配封裝)。
+錯誤: 無法添加 R7 (找不到封裝 'Adafruit BMP390:0603-NO')。
+錯誤: 無法添加 U4 (沒有分配封裝)。
+錯誤: 無法添加 R3 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 BMP1 (沒有分配封裝)。
+錯誤: 無法添加 C1 (找不到封裝 'SparkFun_Magnetometer_MMC5983MA_Qwiic_Micro:0402-TIGHT')。
+錯誤: 無法添加 SJ1 (找不到封裝 'Adafruit BMP390:SOLDERJUMPER_ARROW_NOPASTE')。
+
+
+資訊: 總計警告: 0, 錯誤: 35。

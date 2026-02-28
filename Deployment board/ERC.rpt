@@ -1,0 +1,14 @@
+ERC 報告 (2026-02-25T20:45:49+0800, UTF8 編碼)
+
+***** 圖紙 /
+[power_pin_not_driven]: 輸入電源接腳不受任何輸出電源接腳驅動
+    ; error
+    @(1550 mils, 1750 mils): Symbol #PWR02 接腳 1 [Power input, Line]
+[power_pin_not_driven]: 輸入電源接腳不受任何輸出電源接腳驅動
+    ; error
+    @(1400 mils, 6000 mils): Symbol #PWR01 接腳 1 [Power input, Line]
+[power_pin_not_driven]: 輸入電源接腳不受任何輸出電源接腳驅動
+    ; error
+    @(5700 mils, 2950 mils): Symbol #PWR013 接腳 1 [Power input, Line]
+
+ ** ERC 資訊: 3 個錯誤 3 個警告 0
