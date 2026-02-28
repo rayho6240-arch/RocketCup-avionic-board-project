@@ -3836,7 +3836,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Horizontal"
 			(at 74.93 49.276 0)
 			(effects
 				(font
@@ -3897,7 +3897,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "0750c869-ab72-462e-884e-b418d129d90b")
-		(property "Reference" "Q3"
+		(property "Reference" "Q1"
 			(at 69.85 85.0899 0)
 			(effects
 				(font
@@ -3915,7 +3915,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Package_TO_SOT_SMD:TO-252-2"
 			(at 68.58 83.82 0)
 			(effects
 				(font
@@ -3979,6 +3979,12 @@
 			(uuid "75d11e99-f47e-4754-b15f-3a3d6928a408")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "Q1")
+					(unit 1)
+				)
+			)
 			(project ""
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "Q3")
@@ -3997,7 +4003,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "0b98352a-650b-42b9-a5de-39c782fe7de1")
-		(property "Reference" "D7"
+		(property "Reference" "D3"
 			(at 85.09 86.6774 90)
 			(effects
 				(font
@@ -4015,7 +4021,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_1206_3216Metric_Pad1.42x1.75mm_HandSolder"
 			(at 81.28 86.36 0)
 			(effects
 				(font
@@ -4058,6 +4064,12 @@
 			(uuid "6b2a4bf7-5b77-47bf-8cdf-8e58de149c47")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "D3")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "D7")
@@ -4076,7 +4088,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "0d9ec2a0-dda6-4b58-abdb-392a290332c9")
-		(property "Reference" "#PWR078"
+		(property "Reference" "#PWR015"
 			(at 161.29 57.15 0)
 			(effects
 				(font
@@ -4125,6 +4137,12 @@
 			(uuid "15b39841-472f-4dd6-bef1-32a3bcb53bc9")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR015")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR078")
@@ -4143,7 +4161,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "1a8924d4-40a4-46ed-bfbd-bdd772b5f900")
-		(property "Reference" "C33"
+		(property "Reference" "C2"
 			(at 57.15 46.736 0)
 			(effects
 				(font
@@ -4161,7 +4179,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Capacitor_THT:C_Radial_D10.0mm_H20.0mm_P5.00mm"
 			(at 59.9948 52.07 0)
 			(effects
 				(font
@@ -4197,7 +4215,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "C33")
+					(reference "C2")
 					(unit 1)
 				)
 			)
@@ -4219,7 +4237,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "1e0f95c2-2cfe-454a-b570-5af446fb4d19")
-		(property "Reference" "#PWR030"
+		(property "Reference" "#PWR012"
 			(at 139.7 40.64 0)
 			(effects
 				(font
@@ -4270,7 +4288,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR030")
+					(reference "#PWR012")
 					(unit 1)
 				)
 			)
@@ -4293,7 +4311,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "1ecc3a62-a387-4497-9848-e77fd6498468")
-		(property "Reference" "#PWR069"
+		(property "Reference" "#PWR01"
 			(at 35.56 158.75 0)
 			(effects
 				(font
@@ -4342,6 +4360,12 @@
 			(uuid "15c64bed-51ce-4ed5-824a-25cc60fdaa31")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR01")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR069")
@@ -4434,7 +4458,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "2ef4a74f-d3e9-498d-9106-823411bae8f8")
-		(property "Reference" "#PWR061"
+		(property "Reference" "#PWR03"
 			(at 55.88 101.6 0)
 			(effects
 				(font
@@ -4483,6 +4507,12 @@
 			(uuid "22a07a49-105f-4f66-aff6-4bdc917b1e40")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR03")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR061")
@@ -4502,7 +4532,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "3689029c-2b9c-4e80-b576-72a362e14549")
-		(property "Reference" "D5"
+		(property "Reference" "D2"
 			(at 56.1975 35.56 0)
 			(effects
 				(font
@@ -4518,7 +4548,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 55.88 41.91 0)
 			(effects
 				(font
@@ -4554,7 +4584,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "D5")
+					(reference "D2")
 					(unit 1)
 				)
 			)
@@ -4575,7 +4605,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "3adb5c17-e3a9-4c33-9670-50d67fa4b1c2")
-		(property "Reference" "R37"
+		(property "Reference" "R6"
 			(at 163.322 41.91 0)
 			(effects
 				(font
@@ -4593,7 +4623,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 159.512 43.18 90)
 			(effects
 				(font
@@ -4627,6 +4657,12 @@
 			(uuid "4c4e23b2-7d38-4e76-8d17-5aa56688b27e")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R6")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R37")
@@ -4645,7 +4681,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "3b5f0519-84c8-49dc-8acb-5675c7c8416d")
-		(property "Reference" "#PWR077"
+		(property "Reference" "#PWR018"
 			(at 195.58 97.79 0)
 			(effects
 				(font
@@ -4694,6 +4730,12 @@
 			(uuid "9e4c3b58-8140-4c8e-ae5d-88f9321184b9")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR018")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR077")
@@ -4711,7 +4753,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "3dd7b93d-5184-4f86-8947-72a9ece9b445")
-		(property "Reference" "#PWR068"
+		(property "Reference" "#PWR011"
 			(at 93.98 106.68 0)
 			(effects
 				(font
@@ -4760,6 +4802,12 @@
 			(uuid "ea8e7abf-3cee-4e31-9222-6c9f5bc01f92")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR011")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR068")
@@ -4777,7 +4825,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "42832c04-15fc-46d9-a121-3568794488ad")
-		(property "Reference" "Q6"
+		(property "Reference" "Q3"
 			(at 161.29 26.162 90)
 			(effects
 				(font
@@ -4834,6 +4882,12 @@
 			(uuid "9624386f-30f1-4217-b403-2f7c8abd49c7")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "Q3")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "Q6")
@@ -4851,7 +4905,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "449e4d2a-8f0d-41cc-a819-f2be3901079e")
-		(property "Reference" "#PWR058"
+		(property "Reference" "#PWR02"
 			(at 43.18 44.45 0)
 			(effects
 				(font
@@ -4902,7 +4956,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR058")
+					(reference "#PWR02")
 					(unit 1)
 				)
 			)
@@ -4917,14 +4971,15 @@
 	(symbol
 		(lib_id "Connector_Generic:Conn_01x02")
 		(at 102.87 86.36 0)
+		(mirror x)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
 		(uuid "466c9655-9b2b-4392-b959-e6744d5f7aba")
-		(property "Reference" "J7"
-			(at 105.41 86.3599 0)
+		(property "Reference" "J3"
+			(at 105.41 86.3601 0)
 			(show_name yes)
 			(effects
 				(font
@@ -4935,7 +4990,7 @@
 			)
 		)
 		(property "Value" "Conn_01x02"
-			(at 105.41 88.8999 0)
+			(at 105.41 83.8201 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4944,7 +4999,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x02_P2.54mm_Horizontal"
 			(at 102.87 86.36 0)
 			(effects
 				(font
@@ -4978,6 +5033,12 @@
 			(uuid "e48927da-e965-4c89-93f9-c3f82697a331")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "J3")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "J7")
@@ -4995,7 +5056,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "4c9bb13a-9734-4830-88c7-f0bb25192251")
-		(property "Reference" "R33"
+		(property "Reference" "R5"
 			(at 75.057 117.475 90)
 			(effects
 				(font
@@ -5011,7 +5072,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 74.93 112.522 90)
 			(effects
 				(font
@@ -5045,6 +5106,12 @@
 			(uuid "67544af3-339b-41ca-bc9c-9179541e4720")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R5")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R33")
@@ -5064,7 +5131,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "4e0c7cd3-9c90-403e-a7e8-9e63ba48a7bf")
-		(property "Reference" "#PWR067"
+		(property "Reference" "#PWR07"
 			(at 66.04 121.92 0)
 			(effects
 				(font
@@ -5113,6 +5180,12 @@
 			(uuid "206b1bbf-4275-4f3d-88b9-1751788a2ea6")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR07")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR067")
@@ -5131,7 +5204,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "541cba00-9caa-4bf7-883c-d08b1dec4501")
-		(property "Reference" "F3"
+		(property "Reference" "F1"
 			(at 143.51 24.13 90)
 			(effects
 				(font
@@ -5147,7 +5220,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Fuse:Fuse_0603_1608Metric_Pad1.05x0.95mm_HandSolder"
 			(at 143.51 32.258 90)
 			(effects
 				(font
@@ -5181,6 +5254,12 @@
 			(uuid "244aca85-3e1f-44ef-9da8-efea555d1897")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "F1")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "F3")
@@ -5198,7 +5277,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "5d9493bd-f5be-4a63-af87-6f38e89dcadb")
-		(property "Reference" "#PWR062"
+		(property "Reference" "#PWR05"
 			(at 66.04 22.86 0)
 			(effects
 				(font
@@ -5249,7 +5328,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR062")
+					(reference "#PWR05")
 					(unit 1)
 				)
 			)
@@ -5270,7 +5349,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "6a6ead16-5192-4fb9-b888-8a62dd84d857")
-		(property "Reference" "#PWR076"
+		(property "Reference" "#PWR016"
 			(at 181.61 80.01 0)
 			(effects
 				(font
@@ -5319,6 +5398,12 @@
 			(uuid "141a4f7b-500d-4fbb-b4ff-5326193d8dc7")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR016")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR076")
@@ -5337,7 +5422,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "705337fc-01e1-4e9e-a3a7-5f028fb74d6e")
-		(property "Reference" "Q4"
+		(property "Reference" "Q2"
 			(at 69.85 105.4099 0)
 			(effects
 				(font
@@ -5355,7 +5440,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Package_TO_SOT_SMD:TO-252-2"
 			(at 68.58 104.14 0)
 			(effects
 				(font
@@ -5419,6 +5504,12 @@
 			(uuid "48da25e4-ae1c-4bd4-80c2-60d5a4c258b9")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "Q2")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "Q4")
@@ -5438,7 +5529,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "70ab1876-9b2f-43ff-9a5e-60b434351ab3")
-		(property "Reference" "#PWR059"
+		(property "Reference" "#PWR08"
 			(at 67.31 60.96 0)
 			(effects
 				(font
@@ -5489,7 +5580,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR059")
+					(reference "#PWR08")
 					(unit 1)
 				)
 			)
@@ -5512,7 +5603,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "7247306a-f0dd-4ccb-be6e-463f7323100f")
-		(property "Reference" "J9"
+		(property "Reference" "J2"
 			(at 71.12 135.89 0)
 			(effects
 				(font
@@ -5528,7 +5619,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Horizontal"
 			(at 71.12 144.78 0)
 			(effects
 				(font
@@ -5568,6 +5659,12 @@
 			(uuid "e059507c-579d-4b74-a72c-c5f2cb9dbd61")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "J2")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "J9")
@@ -5587,7 +5684,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "76d4d7f7-8073-4614-a6f8-b90e05d3e1d5")
-		(property "Reference" "#PWR070"
+		(property "Reference" "#PWR09"
 			(at 81.28 158.75 0)
 			(effects
 				(font
@@ -5636,6 +5733,12 @@
 			(uuid "ad17960d-d2c2-4cbe-95d6-50d826f4dcaf")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR09")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR070")
@@ -5653,7 +5756,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "89eb5d88-be40-4eda-aa03-820725016562")
-		(property "Reference" "R34"
+		(property "Reference" "R4"
 			(at 75.057 97.155 90)
 			(effects
 				(font
@@ -5669,7 +5772,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 74.93 92.202 90)
 			(effects
 				(font
@@ -5703,6 +5806,12 @@
 			(uuid "546bded5-7c3d-43e8-a5ff-40530338202b")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R4")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R34")
@@ -5721,7 +5830,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "8f363f78-229f-41fa-81e6-f160d2b571a7")
-		(property "Reference" "C34"
+		(property "Reference" "C1"
 			(at 44.45 46.736 0)
 			(effects
 				(font
@@ -5739,7 +5848,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
 			(at 47.2948 52.07 0)
 			(effects
 				(font
@@ -5775,7 +5884,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "C34")
+					(reference "C1")
 					(unit 1)
 				)
 			)
@@ -5797,7 +5906,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "926c4833-840f-4807-b053-504c33308a7f")
-		(property "Reference" "#PWR066"
+		(property "Reference" "#PWR04"
 			(at 55.88 121.92 0)
 			(effects
 				(font
@@ -5846,6 +5955,12 @@
 			(uuid "39387ee1-9261-4a52-94b7-7ad498995592")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR04")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR066")
@@ -5864,7 +5979,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "938c1a50-b387-4329-b379-4851057eee20")
-		(property "Reference" "#PWR075"
+		(property "Reference" "#PWR014"
 			(at 138.43 78.74 0)
 			(effects
 				(font
@@ -5913,6 +6028,12 @@
 			(uuid "e3bb78ae-f47d-497c-8a94-ef6a89b15956")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR014")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR075")
@@ -5930,7 +6051,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9394a0e7-e5fe-4d95-b3a2-547e55b907d9")
-		(property "Reference" "D10"
+		(property "Reference" "D5"
 			(at 153.67 36.8299 90)
 			(effects
 				(font
@@ -5948,7 +6069,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Diode_SMD:D_SMA-SMB_Universal_Handsoldering"
 			(at 151.13 38.1 0)
 			(effects
 				(font
@@ -5982,6 +6103,12 @@
 			(uuid "77b7cc80-1e05-46d0-b49c-a336d1a082ae")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "D5")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "D10")
@@ -5999,7 +6126,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9538c61e-f5ef-494a-8fab-2b1fca29c4da")
-		(property "Reference" "V_D_BAT+"
+		(property "Reference" "V_D_BAT+1"
 			(at 150.622 74.93 90)
 			(effects
 				(font
@@ -6018,7 +6145,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "TestPoint:TestPoint_THTPad_D1.5mm_Drill0.7mm"
 			(at 144.78 80.01 0)
 			(effects
 				(font
@@ -6049,6 +6176,12 @@
 			(uuid "d5caddb3-1002-4774-bccf-a141e342d39e")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "V_D_BAT+1")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "V_D_BAT+")
@@ -6066,7 +6199,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "978ef322-b61d-4587-ba8b-5d386a1e2514")
-		(property "Reference" "#PWR074"
+		(property "Reference" "#PWR013"
 			(at 148.59 74.93 0)
 			(effects
 				(font
@@ -6115,6 +6248,12 @@
 			(uuid "0edc810c-19e4-4879-9d2c-1bacb85b566e")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR013")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR074")
@@ -6132,7 +6271,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9a746288-ab0d-4cc4-a11b-7f93b783c25d")
-		(property "Reference" "#PWR064"
+		(property "Reference" "#PWR010"
 			(at 93.98 87.63 0)
 			(effects
 				(font
@@ -6181,6 +6320,12 @@
 			(uuid "5280e3aa-c17e-4843-966a-77227338f34d")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR010")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR064")
@@ -6199,7 +6344,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "a728b347-bfb4-432d-a141-ddc5c2a8a8d3")
-		(property "Reference" "R30"
+		(property "Reference" "R3"
 			(at 70.612 35.56 0)
 			(effects
 				(font
@@ -6215,7 +6360,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 64.262 34.29 90)
 			(effects
 				(font
@@ -6251,7 +6396,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "R30")
+					(reference "R3")
 					(unit 1)
 				)
 			)
@@ -6273,7 +6418,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "ad9bc969-fc1f-40e8-a25f-064c4f7aec06")
-		(property "Reference" "D6"
+		(property "Reference" "D4"
 			(at 85.09 106.9974 90)
 			(effects
 				(font
@@ -6291,7 +6436,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_1206_3216Metric_Pad1.42x1.75mm_HandSolder"
 			(at 81.28 106.68 0)
 			(effects
 				(font
@@ -6334,6 +6479,12 @@
 			(uuid "f4557975-7f42-4212-9167-6ba381eb6bed")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "D4")
+					(unit 1)
+				)
+			)
 			(project ""
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "D6")
@@ -6353,7 +6504,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "afddf6cc-838e-4f23-90be-1837a1aae5c3")
-		(property "Reference" "D4"
+		(property "Reference" "D1"
 			(at 56.1975 25.4 0)
 			(effects
 				(font
@@ -6369,7 +6520,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Diode_SMD:D_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 55.88 31.75 0)
 			(effects
 				(font
@@ -6405,7 +6556,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "D4")
+					(reference "D1")
 					(unit 1)
 				)
 			)
@@ -6426,7 +6577,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "bc1d7b05-bd9c-49c1-bb5d-e2cf5b076f7e")
-		(property "Reference" "J8"
+		(property "Reference" "J4"
 			(at 105.41 106.6799 0)
 			(show_name yes)
 			(effects
@@ -6447,7 +6598,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x02_P2.54mm_Horizontal"
 			(at 102.87 106.68 0)
 			(effects
 				(font
@@ -6481,6 +6632,12 @@
 			(uuid "6e047afd-cbe9-4d0e-b9c9-dd410b9d3d53")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "J4")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "J8")
@@ -6498,7 +6655,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "bee656be-198a-426a-8a3e-5f36d37cb3b8")
-		(property "Reference" "R36"
+		(property "Reference" "R7"
 			(at 180.848 74.422 90)
 			(effects
 				(font
@@ -6516,7 +6673,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 182.88 78.232 90)
 			(effects
 				(font
@@ -6550,6 +6707,12 @@
 			(uuid "e9cfc836-b6f6-41c1-a3e1-dd79063caeb4")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R7")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R36")
@@ -6589,7 +6752,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
 			(at 130.81 30.48 0)
 			(effects
 				(font
@@ -6665,7 +6828,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "TestPoint:TestPoint_THTPad_D1.5mm_Drill0.7mm"
 			(at 144.78 83.82 0)
 			(effects
 				(font
@@ -6696,6 +6859,12 @@
 			(uuid "ee2082ff-5094-4dc5-bbe9-d5e71d2971ec")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "GND1")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "GND1")
@@ -6713,7 +6882,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "cd177232-f1dc-4b66-a371-d547c3ef2d2d")
-		(property "Reference" "D9"
+		(property "Reference" "D6"
 			(at 190.5 83.82 0)
 			(effects
 				(font
@@ -6729,7 +6898,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_1206_3216Metric_Pad1.42x1.75mm_HandSolder"
 			(at 190.5 80.01 0)
 			(effects
 				(font
@@ -6772,6 +6941,12 @@
 			(uuid "a95c0064-b621-4a79-bf4b-2d200e1edfa2")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "D6")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "D9")
@@ -6791,7 +6966,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "dc2a0276-ced1-4ba4-ab71-4b60f94f4854")
-		(property "Reference" "J11"
+		(property "Reference" "J1"
 			(at 25.4 135.89 0)
 			(effects
 				(font
@@ -6807,7 +6982,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Horizontal"
 			(at 25.4 144.78 0)
 			(effects
 				(font
@@ -6847,6 +7022,12 @@
 			(uuid "b637f991-2105-4a97-981a-5814063bd617")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "J1")
+					(unit 1)
+				)
+			)
 			(project ""
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "J11")
@@ -6864,7 +7045,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "dd407018-1e75-418e-b6ad-96130080dc19")
-		(property "Reference" "R31"
+		(property "Reference" "R1"
 			(at 60.452 88.9 0)
 			(effects
 				(font
@@ -6880,7 +7061,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 54.102 90.17 90)
 			(effects
 				(font
@@ -6914,6 +7095,12 @@
 			(uuid "989a1bbd-132f-4f6d-80df-0cec5df65158")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R1")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R31")
@@ -6933,7 +7120,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e28e0ba8-8d13-4c25-93f0-10298897a683")
-		(property "Reference" "#PWR065"
+		(property "Reference" "#PWR06"
 			(at 66.04 101.6 0)
 			(effects
 				(font
@@ -6982,6 +7169,12 @@
 			(uuid "8b50cf1d-3950-4975-8bc2-1306c1abf638")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "#PWR06")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "#PWR065")
@@ -6999,7 +7192,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "ec0ad4ef-f9ca-4068-9526-5af762f563e7")
-		(property "Reference" "R32"
+		(property "Reference" "R2"
 			(at 60.452 109.22 0)
 			(effects
 				(font
@@ -7015,7 +7208,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 54.102 110.49 90)
 			(effects
 				(font
@@ -7049,6 +7242,12 @@
 			(uuid "d358ae3a-972e-429f-a108-cd911acf4659")
 		)
 		(instances
+			(project "Deployment board"
+				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
+					(reference "R2")
+					(unit 1)
+				)
+			)
 			(project "SmallAvionic"
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0/16642630-3ce6-4b20-ac8b-55ac2b40aa78"
 					(reference "R32")
@@ -7066,7 +7265,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "fa924a21-3247-42d9-98a2-4614dcda9d04")
-		(property "Reference" "#PWR032"
+		(property "Reference" "#PWR017"
 			(at 181.61 30.48 0)
 			(effects
 				(font
@@ -7117,7 +7316,7 @@
 		(instances
 			(project "untitled"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR032")
+					(reference "#PWR017")
 					(unit 1)
 				)
 			)
@@ -7129,4 +7328,10 @@
 			)
 		)
 	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+	(embedded_fonts no)
 )
