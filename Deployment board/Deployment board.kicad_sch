@@ -3044,7 +3044,7 @@
 	)
 	(wire
 		(pts
-			(xy 93.98 88.9) (xy 93.98 91.44)
+			(xy 97.79 86.36) (xy 97.79 88.9)
 		)
 		(stroke
 			(width 0)
@@ -3104,16 +3104,6 @@
 	)
 	(wire
 		(pts
-			(xy 97.79 78.74) (xy 97.79 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "473ca8e8-61b5-4516-a2c0-48d57fd732a8")
-	)
-	(wire
-		(pts
 			(xy 66.04 111.76) (xy 66.04 114.3)
 		)
 		(stroke
@@ -3121,6 +3111,16 @@
 			(type default)
 		)
 		(uuid "4b8842c2-93e0-4dd5-ba46-f3e1d102be40")
+	)
+	(wire
+		(pts
+			(xy 97.79 78.74) (xy 97.79 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4c028f38-2b69-44f3-a037-27c2bfbc81ae")
 	)
 	(wire
 		(pts
@@ -3391,16 +3391,6 @@
 			(type default)
 		)
 		(uuid "a698f122-58a3-4707-b50f-cc98d4b2294a")
-	)
-	(wire
-		(pts
-			(xy 93.98 88.9) (xy 97.79 88.9)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b2f209ce-a12c-482a-af54-df375d8e63a4")
 	)
 	(wire
 		(pts
@@ -4179,7 +4169,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Radial_D10.0mm_H20.0mm_P5.00mm"
+		(property "Footprint" "Capacitor_THT:C_Radial_D8.0mm_H7.0mm_P3.50mm"
 			(at 59.9948 52.07 0)
 			(effects
 				(font
@@ -6264,7 +6254,7 @@
 	)
 	(symbol
 		(lib_id "power:VAA")
-		(at 93.98 91.44 180)
+		(at 97.79 88.9 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -6272,7 +6262,7 @@
 		(dnp no)
 		(uuid "9a746288-ab0d-4cc4-a11b-7f93b783c25d")
 		(property "Reference" "#PWR010"
-			(at 93.98 87.63 0)
+			(at 97.79 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6281,7 +6271,7 @@
 			)
 		)
 		(property "Value" "V_Ｄ_BAT+"
-			(at 99.06 96.52 0)
+			(at 102.87 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6290,7 +6280,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 93.98 91.44 0)
+			(at 97.79 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6299,7 +6289,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 93.98 91.44 0)
+			(at 97.79 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6308,7 +6298,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"VAA\""
-			(at 93.98 91.44 0)
+			(at 97.79 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
