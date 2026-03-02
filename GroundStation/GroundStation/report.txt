@@ -1,0 +1,353 @@
+資訊: 正在處理符號 'AE1:'。
+資訊: 正在處理符號 'C66:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'AE2:'。
+資訊: 正在處理符號 'C42:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C2:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C10:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C5:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C41:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C39:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C21:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C4:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C40:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C23:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C24:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C22:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C3:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C8:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C7:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C9:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'C6:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'D3:'。
+資訊: 正在處理符號 'C77:Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder'。
+資訊: 正在處理符號 'D1:Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal'。
+資訊: 正在處理符號 'D2:'。
+資訊: 正在處理符號 'D4:LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder'。
+資訊: 正在處理符號 'FB1:'。
+資訊: 正在處理符號 'J1:'。
+資訊: 正在處理符號 'J4:'。
+資訊: 正在處理符號 'L2:'。
+資訊: 正在處理符號 'P1:'。
+資訊: 正在處理符號 'R2_up1:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R3_up1:Resistor_SMD:R_0805_2012Metric'。
+資訊: 總計警告: 0, 錯誤: 13。
+資訊: 正在處理符號 'R3_up2:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R16:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R17:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R26:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R27:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'R29:Resistor_SMD:R_0805_2012Metric'。
+資訊: 正在處理符號 'TP1:'。
+資訊: 正在處理符號 'U1:Package_QFP:LQFP-48_7x7mm_P0.5mm'。
+資訊: 正在處理符號 'U2:'。
+資訊: 正在處理符號 'U3:Package_TO_SOT_SMD:SOT-223-3_TabPin2'。
+資訊: 正在處理符號 'U9:SMT_9N-00B_UBL'。
+資訊: 正在處理符號 'UE80-900M2213S1:'。
+已更新 C4 個欄位。
+已將 C4 圖紙名稱更新為 '/'。
+已將 C4 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C4 封裝篩選器更新為 'C_*'。
+將 C4 接腳 1 連接到了 3.3V。
+將 C4 接腳 2 連接到了 GND。
+添加了 C5 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C5。
+已將 C5 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '0.1uF'。
+將 C5 符號分配從  更新到 /23a08ab7-a6d2-4b0d-9349-dafd9bce53b6。
+已更新 C5 個欄位。
+已將 C5 圖紙名稱更新為 '/'。
+已將 C5 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C5 封裝篩選器更新為 'C_*'。
+將 C5 接腳 2 連接到了 GND。
+將 C5 接腳 1 連接到了 USART2_LoRa1_NRST。
+添加了 C6 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C6。
+已將 C6 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '10u'。
+將 C6 符號分配從  更新到 /ab83571a-cdc2-4185-bcb8-250613eab253。
+已更新 C6 個欄位。
+已將 C6 圖紙名稱更新為 '/'。
+已將 C6 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C6 封裝篩選器更新為 'C_*'。
+將 C6 接腳 1 連接到了 3.3V。
+將 C6 接腳 2 連接到了 GND。
+添加了 C7 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C7。
+已將 C7 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C7 符號分配從  更新到 /1cc18d99-221d-46a2-85f1-c4b8383524c5。
+已更新 C7 個欄位。
+已將 C7 圖紙名稱更新為 '/'。
+已將 C7 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C7 封裝篩選器更新為 'C_*'。
+將 C7 接腳 1 連接到了 3.3V。
+將 C7 接腳 2 連接到了 GND。
+添加了 C8 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C8。
+已將 C8 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C8 符號分配從  更新到 /39c3f7ea-1b10-4890-9277-ada44eec7647。
+已更新 C8 個欄位。
+已將 C8 圖紙名稱更新為 '/'。
+已將 C8 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C8 封裝篩選器更新為 'C_*'。
+將 C8 接腳 1 連接到了 3.3V。
+將 C8 接腳 2 連接到了 GND。
+添加了 C9 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C9。
+已將 C9 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C9 符號分配從  更新到 /32e0052d-bfe8-483b-a1d0-839906c8e646。
+已更新 C9 個欄位。
+已將 C9 圖紙名稱更新為 '/'。
+已將 C9 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C9 封裝篩選器更新為 'C_*'。
+將 C9 接腳 1 連接到了 3.3V。
+將 C9 接腳 2 連接到了 GND。
+添加了 C10 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C10。
+已將 C10 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C10 符號分配從  更新到 /bef80011-65a0-4739-b2cf-c8ba8f656129。
+已更新 C10 個欄位。
+已將 C10 圖紙名稱更新為 '/'。
+已將 C10 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C10 封裝篩選器更新為 'C_*'。
+將 C10 接腳 2 連接到了 GND。
+將 C10 接腳 1 連接到了 3.3V。
+添加了 C21 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C21。
+已將 C21 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C21 符號分配從  更新到 /e9c5f7be-aab0-4c3a-9662-1b10ba5d4ac8。
+已更新 C21 個欄位。
+已將 C21 圖紙名稱更新為 '/'。
+已將 C21 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C21 封裝篩選器更新為 'C_*'。
+將 C21 接腳 1 連接到了 3.3V。
+將 C21 接腳 2 連接到了 GND。
+添加了 C22 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C22。
+已將 C22 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '47u'。
+將 C22 符號分配從  更新到 /948ea0de-2103-45ec-a50d-7546e21b3372。
+已更新 C22 個欄位。
+已將 C22 圖紙名稱更新為 '/'。
+已將 C22 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C22 封裝篩選器更新為 'C_*'。
+將 C22 接腳 2 連接到了 GND。
+將 C22 接腳 1 連接到了 3.3V。
+添加了 C23 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C23。
+已將 C23 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C23 符號分配從  更新到 /e814b72e-8fe8-470d-954d-98a34ca8e341。
+已更新 C23 個欄位。
+已將 C23 圖紙名稱更新為 '/'。
+已將 C23 封裝篩選器更新為 'C_*'。
+將 C23 接腳 1 連接到了 +5V。
+將 C23 接腳 2 連接到了 GND。
+添加了 C24 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C24。
+已將 C24 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '47u'。
+將 C24 符號分配從  更新到 /f4a82f71-1a5a-4f2c-a5d8-8a3ecb933323。
+已更新 C24 個欄位。
+已將 C24 圖紙名稱更新為 '/'。
+已將 C24 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C24 封裝篩選器更新為 'C_*'。
+將 C24 接腳 1 連接到了 3.3V。
+將 C24 接腳 2 連接到了 GND。
+添加了 C39 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C39。
+已將 C39 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '10u'。
+將 C39 符號分配從  更新到 /549c565e-341e-4473-af93-8ecd5bfedc8e。
+已更新 C39 個欄位。
+已將 C39 圖紙名稱更新為 '/'。
+已將 C39 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C39 封裝篩選器更新為 'C_*'。
+將 C39 接腳 2 連接到了 GND。
+將 C39 接腳 1 連接到了 3.3V。
+添加了 C40 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C40。
+已將 C40 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C40 符號分配從  更新到 /fe9cb48c-dad6-47ad-8d21-7ca3c3b4176f。
+已更新 C40 個欄位。
+已將 C40 圖紙名稱更新為 '/'。
+已將 C40 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C40 封裝篩選器更新為 'C_*'。
+將 C40 接腳 2 連接到了 GND。
+將 C40 接腳 1 連接到了 3.3V。
+添加了 C41 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C41。
+已將 C41 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 'NC'。
+將 C41 符號分配從  更新到 /45d2aba7-2240-45d2-b7de-36df2291782d。
+已更新 C41 個欄位。
+已將 C23 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C41 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C41 封裝篩選器更新為 'C_*'。
+將 C41 接腳 2 連接到了 GND。
+添加網路 Net-(C41-Pad1)。
+將 C41 接腳 1 連接到了 Net-(C41-Pad1)。
+添加了 C42 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C42。
+已將 C42 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100p'。
+將 C42 符號分配從  更新到 /c8a138e8-5f1e-45f7-b28d-5506b106bef7。
+已更新 C42 個欄位。
+已將 C42 圖紙名稱更新為 '/'。
+已將 C42 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C42 封裝篩選器更新為 'C_*'。
+添加網路 Net-(U9-RF_IN)。
+將 C42 接腳 2 連接到了 Net-(U9-RF_IN)。
+將 C42 接腳 1 連接到了 Net-(C41-Pad1)。
+添加了 C66 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C66。
+已將 C66 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '100n'。
+將 C66 符號分配從  更新到 /91e86e9a-4be6-4e59-b06e-b83f72f31225。
+已更新 C66 個欄位。
+已將 C66 圖紙名稱更新為 '/'。
+已將 C66 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C66 封裝篩選器更新為 'C_*'。
+將 C66 接腳 1 連接到了 Net-(U1-VDDA)。
+將 C66 接腳 2 連接到了 GND。
+添加了 C2 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+添加了 C77 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C77。
+已將 C77 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '1u'。
+將 C77 符號分配從  更新到 /d3158d05-d7cb-4182-8011-2f0179232cd2。
+已更新 C77 個欄位。
+已將 C77 圖紙名稱更新為 '/'。
+已將 C77 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C77 封裝篩選器更新為 'C_*'。
+將 C77 接腳 1 連接到了 Net-(U1-VDDA)。
+將 C77 接腳 2 連接到了 GND。
+已將 REF** 的參考位置更改為 C2。
+已將 C2 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '0.1uF'。
+已將 C41 圖紙名稱更新為 '/'。
+將 C2 符號分配從  更新到 /16e83b6b-f0b7-4b81-a449-8761cfb73baa。
+添加了 D4 (封裝 'LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder')。
+已將 REF** 的參考位置更改為 D4。
+已將 D4 的值從 'LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder' 修改為 'GPS_LED'。
+將 D4 符號分配從  更新到 /80cbee04-e62b-4256-b92d-7bfc987925c7。
+已更新 D4 個欄位。
+已將 D4 圖紙名稱更新為 '/'。
+已將 D4 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 D4 封裝篩選器更新為 'LED* LED_SMD:* LED_THT:*'。
+添加網路 Net-(D4-A)。
+將 D4 接腳 2 連接到了 Net-(D4-A)。
+將 D4 接腳 1 連接到了 GND。
+已更新 C2 個欄位。
+已將 C2 圖紙名稱更新為 '/'。
+已將 C2 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 C2 封裝篩選器更新為 'C_*'。
+將 C2 接腳 1 連接到了 3.3V。
+將 C2 接腳 2 連接到了 GND。
+添加了 R2_up1 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R2_up1。
+已將 R2_up1 的值從 'R_0805_2012Metric' 修改為 '10k'。
+將 R2_up1 符號分配從  更新到 /9c8c409d-40f3-4b78-9a30-d673a414ae1a。
+已更新 R2_up1 個欄位。
+已將 R2_up1 圖紙名稱更新為 '/'。
+已將 R2_up1 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R2_up1 封裝篩選器更新為 'R_*'。
+將 R2_up1 接腳 2 連接到了 SPI2_SDcard_CS。
+將 R2_up1 接腳 1 連接到了 3.3V。
+添加了 C3 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+添加了 R3_up1 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R3_up1。
+已將 R3_up1 的值從 'R_0805_2012Metric' 修改為 '10k'。
+將 R3_up1 符號分配從  更新到 /ca71d49b-67ae-4af6-8806-e98cc0729005。
+已更新 R3_up1 個欄位。
+已將 R3_up1 圖紙名稱更新為 '/'。
+已將 R3_up1 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R3_up1 封裝篩選器更新為 'R_*'。
+添加網路 Net-(P1-CC)。
+已將 REF** 的參考位置更改為 C3。
+將 R3_up1 接腳 2 連接到了 GND。
+已將 C3 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '0.1uF'。
+添加了 R3_up2 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R3_up2。
+已將 R3_up2 的值從 'R_0805_2012Metric' 修改為 '10k'。
+將 R3_up2 符號分配從  更新到 /276ec609-49ec-497a-87d3-e16df7c6d26a。
+已更新 R3_up2 個欄位。
+已將 R3_up2 圖紙名稱更新為 '/'。
+已將 R3_up2 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R3_up2 封裝篩選器更新為 'R_*'。
+將 R3_up2 接腳 2 連接到了 USART2_LoRa1_NRST。
+將 R3_up2 接腳 1 連接到了 3.3V。
+將 C3 符號分配從  更新到 /43d36775-7a12-4ef0-ba3e-e0cbfc8845eb。
+添加了 R16 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R16。
+已將 R16 的值從 'R_0805_2012Metric' 修改為 '1k'。
+將 R16 符號分配從  更新到 /5cd89086-a9c4-4665-a067-bb64e86d29ef。
+已更新 R16 個欄位。
+已將 R16 圖紙名稱更新為 '/'。
+已將 R16 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R16 封裝篩選器更新為 'R_*'。
+將 R16 接腳 2 連接到了 +5V。
+添加網路 Net-(D2-A)。
+將 R16 接腳 1 連接到了 Net-(D2-A)。
+已更新 C3 個欄位。
+添加了 R17 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R17。
+已將 R17 的值從 'R_0805_2012Metric' 修改為 '1k'。
+將 R17 符號分配從  更新到 /c80c3888-8165-4a40-a184-654ba0d3d379。
+已更新 R17 個欄位。
+已將 R17 圖紙名稱更新為 '/'。
+已將 R17 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R17 封裝篩選器更新為 'R_*'。
+添加網路 Net-(D3-A)。
+將 R17 接腳 1 連接到了 Net-(D3-A)。
+將 R17 接腳 2 連接到了 3.3V。
+已將 C3 圖紙名稱更新為 '/'。
+添加了 R26 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R26。
+已將 R26 的值從 'R_0805_2012Metric' 修改為 '1k'。
+將 R26 符號分配從  更新到 /f15f036f-dadc-4772-a569-0328723ea0d0。
+已更新 R26 個欄位。
+將 R3_up1 接腳 1 連接到了 Net-(P1-CC)。
+已將 R26 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R26 封裝篩選器更新為 'R_*'。
+添加網路 Net-(U9-TIMEPULSE)。
+將 R26 接腳 2 連接到了 Net-(U9-TIMEPULSE)。
+將 R26 接腳 1 連接到了 Net-(D4-A)。
+已將 C3 圖紙檔案更新為 'GroundStation.kicad_sch'。
+添加了 R27 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R27。
+已將 R27 的值從 'R_0805_2012Metric' 修改為 'NC'。
+將 R27 符號分配從  更新到 /fafc1f79-dbc1-46b5-ab3e-afe314c68a7b。
+已更新 R27 個欄位。
+已將 R27 圖紙名稱更新為 '/'。
+已將 R27 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R27 封裝篩選器更新為 'R_*'。
+將 R27 接腳 1 連接到了 Net-(C41-Pad1)。
+添加網路 Net-(U9-VCC_RF)。
+將 R27 接腳 2 連接到了 Net-(U9-VCC_RF)。
+已將 C3 封裝篩選器更新為 'C_*'。
+添加了 R29 (封裝 'Resistor_SMD:R_0805_2012Metric')。
+已將 REF** 的參考位置更改為 R29。
+已將 R29 的值從 'R_0805_2012Metric' 修改為 '10k'。
+將 R29 符號分配從  更新到 /912d65ec-2cbc-48e3-80e5-7d7c9fa4f145。
+已更新 R29 個欄位。
+已將 R29 圖紙名稱更新為 '/'。
+已將 R29 圖紙檔案更新為 'GroundStation.kicad_sch'。
+已將 R29 封裝篩選器更新為 'R_*'。
+將 R29 接腳 2 連接到了 USART1_GPS_RESET。
+將 R29 接腳 1 連接到了 3.3V。
+將 C3 接腳 2 連接到了 GND。
+將 C3 接腳 1 連接到了 3.3V。
+添加了 C4 (封裝 'Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder')。
+已將 REF** 的參考位置更改為 C4。
+已將 C4 的值從 'C_0805_2012Metric_Pad1.18x1.45mm_HandSolder' 修改為 '0.1uF'。
+將 C4 符號分配從  更新到 /ca811cb8-8f43-4460-92a9-382081120ee8。
+移除了未使用的封裝 REF**。
+移除了未使用的封裝 REF**。
+
+
+已將 R26 圖紙名稱更新為 '/'。
+錯誤: 無法添加 J4 (沒有分配封裝)。
+錯誤: 無法添加 D3 (沒有分配封裝)。
+錯誤: 無法添加 U2 (沒有分配封裝)。
+錯誤: 無法添加 L2 (沒有分配封裝)。
+錯誤: 無法添加 AE2 (沒有分配封裝)。
+錯誤: 無法添加 U9 (找不到封裝 'SMT_9N-00B_UBL')。
+錯誤: 無法添加 P1 (沒有分配封裝)。
+錯誤: 無法添加 UE80-900M2213S1 (沒有分配封裝)。
+錯誤: 無法添加 FB1 (沒有分配封裝)。
+錯誤: 無法添加 D2 (沒有分配封裝)。
+錯誤: 無法添加 J1 (沒有分配封裝)。
+錯誤: 無法添加 AE1 (沒有分配封裝)。
+錯誤: 無法添加 TP1 (沒有分配封裝)。
+
+
+資訊: 總計警告: 0, 錯誤: 13。
