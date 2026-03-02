@@ -4374,7 +4374,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "29a917ab-ee65-4c45-953f-a2e28cbda949")
-		(property "Reference" "SW1"
+		(property "Reference" "J6"
 			(at 176.53 36.83 0)
 			(effects
 				(font
@@ -4390,7 +4390,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_Wire:SolderWire-2sqmm_1x02_P7.8mm_D2mm_OD3.9mm"
 			(at 176.53 30.48 0)
 			(effects
 				(font
@@ -4426,7 +4426,7 @@
 		(instances
 			(project ""
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "SW1")
+					(reference "J6")
 					(unit 1)
 				)
 			)
@@ -4743,7 +4743,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "3dd7b93d-5184-4f86-8947-72a9ece9b445")
-		(property "Reference" "#PWR011"
+		(property "Reference" "#PWR010"
 			(at 93.98 106.68 0)
 			(effects
 				(font
@@ -4794,7 +4794,7 @@
 		(instances
 			(project "Deployment board"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR011")
+					(reference "#PWR010")
 					(unit 1)
 				)
 			)
@@ -6261,7 +6261,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9a746288-ab0d-4cc4-a11b-7f93b783c25d")
-		(property "Reference" "#PWR010"
+		(property "Reference" "#PWR011"
 			(at 97.79 85.09 0)
 			(effects
 				(font
@@ -6312,7 +6312,7 @@
 		(instances
 			(project "Deployment board"
 				(path "/0306e6d1-d01c-48b9-a21d-45e3980b499b"
-					(reference "#PWR010")
+					(reference "#PWR011")
 					(unit 1)
 				)
 			)
@@ -6742,7 +6742,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Horizontal"
+		(property "Footprint" "Connector_Wire:SolderWire-2sqmm_1x02_P7.8mm_D2mm_OD3.9mm"
 			(at 130.81 30.48 0)
 			(effects
 				(font
