@@ -11229,16 +11229,6 @@
 		)
 		(uuid "8bb65861-c290-46a7-9e0e-046b58ec4906")
 	)
-	(text "Reserved for active atenna"
-		(exclude_from_sim no)
-		(at 365.252 136.652 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "8c289d4c-11b8-4ba1-9088-cc1824845377")
-	)
 	(text "High g accel meter\n"
 		(exclude_from_sim no)
 		(at 230.378 17.272 0)
@@ -11464,6 +11454,12 @@
 		(uuid "1188aeef-0694-429f-9c82-034457f07b24")
 	)
 	(junction
+		(at 364.49 132.08)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "122da5db-0b4b-421f-808a-f00fd9ab850c")
+	)
+	(junction
 		(at 53.34 114.3)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -11480,12 +11476,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "155a59ae-4e85-440d-9729-d05533a1e583")
-	)
-	(junction
-		(at 363.22 124.46)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "15fc4582-7263-4419-8fb7-fe8c8228a7cb")
 	)
 	(junction
 		(at 243.84 104.14)
@@ -11540,12 +11530,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "22f4275d-1ae3-41ce-a2f1-d7174fe9953c")
-	)
-	(junction
-		(at 365.76 132.08)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "2a520d53-5f65-4dd2-9e49-41a0d7fcb35f")
 	)
 	(junction
 		(at 162.56 34.29)
@@ -11932,6 +11916,12 @@
 		(uuid "a1cbe9b5-904a-48e3-9e71-71c4363d9de1")
 	)
 	(junction
+		(at 364.49 124.46)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "a20abf22-22ae-4d2c-9d23-20de84cc071d")
+	)
+	(junction
 		(at 257.81 156.21)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -12038,12 +12028,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "c1cb7f75-9ba4-4f94-b451-0e5f198fe7d1")
-	)
-	(junction
-		(at 365.76 124.46)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "c2fec616-ced7-4563-8695-3429f0a4d0a2")
 	)
 	(junction
 		(at 356.87 227.33)
@@ -12298,6 +12282,10 @@
 	(no_connect
 		(at 148.59 129.54)
 		(uuid "1fdada4c-af95-47d5-96f3-726a2295a95c")
+	)
+	(no_connect
+		(at 374.65 119.38)
+		(uuid "24d79037-1022-4454-b48c-83e06635fc78")
 	)
 	(no_connect
 		(at 148.59 152.4)
@@ -12583,6 +12571,16 @@
 	)
 	(wire
 		(pts
+			(xy 364.49 132.08) (xy 374.65 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0824667e-b571-4b39-b6b2-4eafc80ef925")
+	)
+	(wire
+		(pts
 			(xy 316.23 339.09) (xy 323.85 339.09)
 		)
 		(stroke
@@ -12800,6 +12798,16 @@
 			(type default)
 		)
 		(uuid "0fc4531b-177f-4c29-bbe3-090fa21ab559")
+	)
+	(wire
+		(pts
+			(xy 364.49 124.46) (xy 365.76 124.46)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0fe9621e-a1a1-4b27-bb89-814fc3912247")
 	)
 	(wire
 		(pts
@@ -13143,7 +13151,7 @@
 	)
 	(wire
 		(pts
-			(xy 349.25 132.08) (xy 365.76 132.08)
+			(xy 349.25 132.08) (xy 364.49 132.08)
 		)
 		(stroke
 			(width 0)
@@ -13180,16 +13188,6 @@
 			(type default)
 		)
 		(uuid "278b1854-a4c9-4977-8859-2e9a2d2249aa")
-	)
-	(wire
-		(pts
-			(xy 363.22 119.38) (xy 363.22 124.46)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "27b13f48-b158-488f-8edd-ee7e331b5d1a")
 	)
 	(wire
 		(pts
@@ -14453,16 +14451,6 @@
 	)
 	(wire
 		(pts
-			(xy 365.76 132.08) (xy 374.65 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6ec2027e-523a-49a0-875f-41701146a44d")
-	)
-	(wire
-		(pts
 			(xy 280.67 347.98) (xy 279.4 347.98)
 		)
 		(stroke
@@ -14960,16 +14948,6 @@
 			(type default)
 		)
 		(uuid "83345a43-066b-4330-a632-6833decec39d")
-	)
-	(wire
-		(pts
-			(xy 363.22 124.46) (xy 365.76 124.46)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "834c21a9-fab2-4d3a-9c1c-3a27270bd544")
 	)
 	(wire
 		(pts
@@ -15500,16 +15478,6 @@
 			(type default)
 		)
 		(uuid "9cf8466d-85f7-4046-929c-264ce6188f1e")
-	)
-	(wire
-		(pts
-			(xy 370.84 119.38) (xy 374.65 119.38)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9e16987d-4f41-4c16-a0c6-6463772b69ba")
 	)
 	(wire
 		(pts
@@ -17643,7 +17611,7 @@
 	)
 	(wire
 		(pts
-			(xy 354.33 124.46) (xy 355.6 124.46)
+			(xy 354.33 124.46) (xy 364.49 124.46)
 		)
 		(stroke
 			(width 0)
@@ -25934,7 +25902,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 365.76 128.27 0)
+		(at 364.49 128.27 0)
 		(mirror y)
 		(unit 1)
 		(exclude_from_sim no)
@@ -25943,7 +25911,7 @@
 		(dnp no)
 		(uuid "45d2aba7-2240-45d2-b7de-36df2291782d")
 		(property "Reference" "C41"
-			(at 362.712 126.746 0)
+			(at 361.442 126.746 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -25952,7 +25920,7 @@
 			)
 		)
 		(property "Value" "NC"
-			(at 362.712 129.5399 0)
+			(at 361.442 129.5399 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -25961,7 +25929,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
-			(at 364.7948 132.08 0)
+			(at 363.5248 132.08 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -25970,7 +25938,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 365.76 128.27 0)
+			(at 364.49 128.27 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -25979,7 +25947,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 365.76 128.27 0)
+			(at 364.49 128.27 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -31718,74 +31686,6 @@
 			(project "Iusbubula_Avionic_Board"
 				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
 					(reference "#PWR042")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:L")
-		(at 359.41 124.46 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "97863547-1eb7-4ded-bf57-683282767e38")
-		(property "Reference" "L2"
-			(at 359.41 119.38 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "short"
-			(at 359.41 121.92 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 359.41 124.46 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 359.41 124.46 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Inductor"
-			(at 359.41 124.46 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "d3dab5bb-3871-42ef-ac81-ee4890db5652")
-		)
-		(pin "2"
-			(uuid "e52672aa-9301-4a45-a94e-7910c5916117")
-		)
-		(instances
-			(project ""
-				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
-					(reference "L2")
 					(unit 1)
 				)
 			)
@@ -38969,76 +38869,6 @@
 			(project "Iusbubula_Avionic_Board"
 				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
 					(reference "#PWR032")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 367.03 119.38 90)
-		(mirror x)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "fafc1f79-dbc1-46b5-ab3e-afe314c68a7b")
-		(property "Reference" "R27"
-			(at 364.744 113.03 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "NC"
-			(at 364.236 115.57 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 367.03 117.602 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 367.03 119.38 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Resistor"
-			(at 367.03 119.38 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "49042eb9-ae16-4b1d-a8fe-476e8e61090a")
-		)
-		(pin "1"
-			(uuid "ba60d881-dfe1-4347-a333-5b36f64a0738")
-		)
-		(instances
-			(project "Iusbubula_Avionic_Board"
-				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
-					(reference "R27")
 					(unit 1)
 				)
 			)
