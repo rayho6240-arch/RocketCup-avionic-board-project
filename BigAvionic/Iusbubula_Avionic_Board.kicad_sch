@@ -21353,7 +21353,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:10LGA_2X2X0p75_BOS-M"
 			(at 260.35 106.68 0)
 			(effects
 				(font
@@ -21946,7 +21946,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:LGA_CC-14-1_ADI-L"
 			(at 251.46 40.64 0)
 			(effects
 				(font
@@ -26162,7 +26162,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:VQFN-HR9_RQF_TEX(TPS54538)"
 			(at 161.29 250.19 0)
 			(effects
 				(font
@@ -28389,7 +28389,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:XCVR_E22-900T30S"
 			(at 397.51 180.34 0)
 			(effects
 				(font
@@ -34491,7 +34491,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:MMC5983MA_MEM"
 			(at 378.46 39.37 0)
 			(effects
 				(font
@@ -35901,7 +35901,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Tony:E80-xxxM2213S"
 			(at 488.95 187.96 0)
 			(effects
 				(font
@@ -39517,6 +39517,48 @@
 				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
 					(reference "#PWR033")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(sheet
+		(at 505.46 46.99)
+		(size 73.66 69.85)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "c958b3fb-2d12-453d-aad4-0266872b7c68")
+		(property "Sheetname" "top layer"
+			(at 505.46 46.2784 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "untitled.kicad_sch"
+			(at 505.46 117.4246 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "Iusbubula_Avionic_Board"
+				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
+					(page "2")
 				)
 			)
 		)
