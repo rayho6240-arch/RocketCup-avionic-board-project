@@ -37,9 +37,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.7,
-          "height": 1.5,
-          "width": 1.5
+          "drill": 1.0,
+          "height": 1.7,
+          "width": 1.7
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -479,7 +479,13 @@
       "version": 4
     },
     "net_colors": {
-      "GND": "rgb(90, 255, 0)"
+      "Backup_AV_FIRE": "rgb(255, 43, 152)",
+      "Backup_AV_PWM_Servo": "rgb(255, 16, 196)",
+      "GND": "rgb(90, 255, 0)",
+      "Main_AV_FIRE": "rgb(255, 24, 157)",
+      "Main_AV_PWM_Servo": "rgb(255, 56, 150)",
+      "V_D_BAT+": "rgb(51, 80, 255)",
+      "V_Ｄ_BAT+": "rgb(67, 62, 255)"
     },
     "netclass_assignments": null,
     "netclass_patterns": []
