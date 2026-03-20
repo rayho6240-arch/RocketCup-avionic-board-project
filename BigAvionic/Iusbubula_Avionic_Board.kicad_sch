@@ -11805,6 +11805,16 @@
 	)
 	(wire
 		(pts
+			(xy 165.1 167.64) (xy 148.59 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "292af020-3dba-430a-9d78-bed560c28b07")
+	)
+	(wire
+		(pts
 			(xy 91.44 240.03) (xy 91.44 243.84)
 		)
 		(stroke
@@ -14955,6 +14965,16 @@
 	)
 	(wire
 		(pts
+			(xy 180.34 167.64) (xy 172.72 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d0b62f68-27cd-4e63-8978-9a23fd93afc9")
+	)
+	(wire
+		(pts
 			(xy 316.23 111.76) (xy 316.23 113.03)
 		)
 		(stroke
@@ -17121,7 +17141,7 @@
 	)
 	(global_label "UART6_RX"
 		(shape input)
-		(at 148.59 167.64 0)
+		(at 180.34 167.64 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -17131,7 +17151,7 @@
 		)
 		(uuid "5636ec58-6123-4fce-bc09-4e8da133d695")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 160.8885 167.64 0)
+			(at 192.6385 167.64 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -32582,6 +32602,73 @@
 			(project "Iusbubula_Avionic_Board"
 				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
 					(reference "#PWR013")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 168.91 167.64 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "e0b8dadf-c2c0-43ed-98e8-b21abcf43a79")
+		(property "Reference" "R27"
+			(at 168.91 171.958 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "22ohm"
+			(at 168.91 169.926 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
+			(at 168.91 165.862 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 168.91 167.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 168.91 167.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "1d209279-537d-478d-b4df-37cce96d71e5")
+		)
+		(pin "2"
+			(uuid "585abc48-4aef-4aaa-b2cf-703f99b432df")
+		)
+		(instances
+			(project "Iusbubula_Avionic_Board"
+				(path "/80a059dc-2311-4dd3-afad-18a5367fc218"
+					(reference "R27")
 					(unit 1)
 				)
 			)
