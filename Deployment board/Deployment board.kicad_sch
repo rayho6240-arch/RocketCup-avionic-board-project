@@ -3917,7 +3917,7 @@
 				)
 			)
 		)
-		(property "Value" "3.3k"
+		(property "Value" "667-ERA-6ARB332V"
 			(at 83.439 54.483 0)
 			(effects
 				(font
@@ -3934,7 +3934,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/ERA-6ARB332V?qs=sGAEpiMZZMtlubZbdhIBIJiMSTY83nT490zRdh1C8xA%3D"
 			(at 87.63 54.61 0)
 			(effects
 				(font
@@ -4004,7 +4004,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "https://ngspice.sourceforge.io/docs/ngspice-html-manual/manual.xhtml#cha_MOSFETs"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Infineon-Technologies/IRLR7843TRPBF?qs=Z8%252BeY1k3TIIgO44qG7em9Q%3D%3D"
 			(at 63.5 99.06 0)
 			(effects
 				(font
@@ -4092,7 +4092,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "755-SML-S13UTT68"
 			(at 85.09 89.2174 90)
 			(effects
 				(font
@@ -4110,7 +4110,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/ROHM-Semiconductor/SML-S13UTT68?qs=sGAEpiMZZMsl8UZd3ZuU6aSVhrRupcD2Jk4wLvHtCCfw%2Fa%252BWoLhlIQ%3D%3D"
 			(at 81.28 86.36 0)
 			(effects
 				(font
@@ -4248,7 +4248,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "755-SML-S13UTT68"
 			(at 83.566 48.768 90)
 			(effects
 				(font
@@ -4265,7 +4265,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/ROHM-Semiconductor/SML-S13UTT68?qs=sGAEpiMZZMsl8UZd3ZuU6aSVhrRupcD2Jk4wLvHtCCfw%2Fa%252BWoLhlIQ%3D%3D"
 			(at 87.63 45.72 0)
 			(effects
 				(font
@@ -4636,7 +4636,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Vishay/SD101CWS-HE3_A-08?qs=CoAU%2FpHVZXzeRZXBFzoCTg%3D%3D"
 			(at 55.88 41.91 0)
 			(effects
 				(font
@@ -4693,7 +4693,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "100k"
+		(property "Value" "594-MCU0805PC1003FP5"
 			(at 163.322 44.45 0)
 			(effects
 				(font
@@ -4711,7 +4711,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Vishay-Beyschlag/MCU0805PC1003FP500?qs=sGAEpiMZZMtlubZbdhIBIONtIqra%2FA5Y8S3P8H3VDz8%3D"
 			(at 161.29 43.18 0)
 			(effects
 				(font
@@ -4912,7 +4912,7 @@
 				)
 			)
 		)
-		(property "Value" "667-EEH-ZS1E102UP(1000u)"
+		(property "Value" "667-EEH-ZS1E102UP"
 			(at 105.156 63.5 90)
 			(effects
 				(font
@@ -4929,7 +4929,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "kicad-embed://Panasonic_Capacitor Hybrid SMD Hi Temp (EEH-ZS(U).pdf"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/EEH-ZS1E102UP?qs=Jslch3jnSjkjjSRRp9pS2g%3D%3D"
 			(at 100.33 59.69 0)
 			(effects
 				(font
@@ -4979,7 +4979,7 @@
 				)
 			)
 		)
-		(property "Value" "RM40P40LD"
+		(property "Value" "FDD4141"
 			(at 161.29 26.67 90)
 			(effects
 				(font
@@ -4988,7 +4988,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "Package_TO_SOT_SMD:TO-252-2"
+		(property "Footprint" "Package_TO_SOT_SMD:TO-252-3_TabPin2"
 			(at 163.195 27.94 0)
 			(effects
 				(font
@@ -4999,7 +4999,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "https://www.infineon.com/dgdl/irlml6402pbf.pdf?fileId=5546d462533600a401535668d5c2263c"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/ERA-6ARB332V?qs=sGAEpiMZZMtlubZbdhIBIJiMSTY83nT490zRdh1C8xA%3D"
 			(at 165.1 27.94 0)
 			(effects
 				(font
@@ -5138,7 +5138,7 @@
 				)
 			)
 		)
-		(property "Value" "3.3k"
+		(property "Value" "667-ERA-6ARB332V"
 			(at 75.311 119.507 90)
 			(effects
 				(font
@@ -5155,7 +5155,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/ERA-6ARB332V?qs=sGAEpiMZZMtlubZbdhIBIJiMSTY83nT490zRdh1C8xA%3D"
 			(at 74.93 114.3 0)
 			(effects
 				(font
@@ -5286,7 +5286,7 @@
 				)
 			)
 		)
-		(property "Value" "Fuse (>15A)"
+		(property "Value" "652-SF-1206HV15M-2"
 			(at 143.51 26.67 90)
 			(effects
 				(font
@@ -5294,7 +5294,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Fuse:Fuse_0603_1608Metric_Pad1.05x0.95mm_HandSolder"
+		(property "Footprint" "Fuse:Fuse_1206_3216Metric_Pad1.42x1.75mm_HandSolder"
 			(at 143.51 32.258 90)
 			(effects
 				(font
@@ -5303,7 +5303,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Bourns/SF-1206HV15M-2?qs=gTYE2QTfZfSThH7Z0dUJfA%3D%3D"
 			(at 143.51 30.48 0)
 			(effects
 				(font
@@ -5378,7 +5378,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "https://ngspice.sourceforge.io/docs/ngspice-html-manual/manual.xhtml#cha_MOSFETs"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Infineon-Technologies/IRLR7843TRPBF?qs=Z8%252BeY1k3TIIgO44qG7em9Q%3D%3D"
 			(at 72.39 54.61 0)
 			(effects
 				(font
@@ -5623,7 +5623,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "https://ngspice.sourceforge.io/docs/ngspice-html-manual/manual.xhtml#cha_MOSFETs"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Infineon-Technologies/IRLR7843TRPBF?qs=Z8%252BeY1k3TIIgO44qG7em9Q%3D%3D"
 			(at 63.5 119.38 0)
 			(effects
 				(font
@@ -5864,7 +5864,7 @@
 				)
 			)
 		)
-		(property "Value" "3.3k"
+		(property "Value" "667-ERA-6ARB332V"
 			(at 75.311 99.187 90)
 			(effects
 				(font
@@ -5881,7 +5881,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/ERA-6ARB332V?qs=sGAEpiMZZMtlubZbdhIBIJiMSTY83nT490zRdh1C8xA%3D"
 			(at 74.93 93.98 0)
 			(effects
 				(font
@@ -5939,7 +5939,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "100n"
+		(property "Value" "77-VJ0805Y104KCAAJ"
 			(at 103.632 54.864 90)
 			(effects
 				(font
@@ -5957,7 +5957,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Vishay-Vitramon/VJ0805Y104KCAAJ?qs=sGAEpiMZZMsh%252B1woXyUXjxZuI%2FKWQWdPsweoka7b29g%3D"
 			(at 101.6 52.07 0)
 			(effects
 				(font
@@ -6160,7 +6160,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "TVS"
+		(property "Value" "652-SMAJ15CA"
 			(at 153.67 39.3699 90)
 			(effects
 				(font
@@ -6178,7 +6178,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Bourns/SMAJ15CA?qs=A3H9pljuJ8SP8vq85C%2Fg6w%3D%3D"
 			(at 151.13 38.1 0)
 			(effects
 				(font
@@ -6451,7 +6451,7 @@
 				)
 			)
 		)
-		(property "Value" "1k"
+		(property "Value" "708-RNAN0805BKE1K00"
 			(at 69.596 51.562 0)
 			(effects
 				(font
@@ -6468,7 +6468,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/SEI-Stackpole/RNAN0805BKE1K00?qs=sGAEpiMZZMtlubZbdhIBILBsAZ06Y%2Fzi26na1WyXdT4%3D"
 			(at 64.77 50.8 0)
 			(effects
 				(font
@@ -6526,7 +6526,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "755-SML-S13UTT68"
 			(at 85.09 109.5374 90)
 			(effects
 				(font
@@ -6544,7 +6544,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/ROHM-Semiconductor/SML-S13UTT68?qs=sGAEpiMZZMsl8UZd3ZuU6aSVhrRupcD2Jk4wLvHtCCfw%2Fa%252BWoLhlIQ%3D%3D"
 			(at 81.28 106.68 0)
 			(effects
 				(font
@@ -6694,7 +6694,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Vishay/SD101CWS-HE3_A-08?qs=CoAU%2FpHVZXzeRZXBFzoCTg%3D%3D"
 			(at 55.88 31.75 0)
 			(effects
 				(font
@@ -6830,7 +6830,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "3.3k"
+		(property "Value" "667-ERA-6ARB332V"
 			(at 180.848 76.962 90)
 			(effects
 				(font
@@ -6848,7 +6848,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Panasonic/ERA-6ARB332V?qs=sGAEpiMZZMtlubZbdhIBIJiMSTY83nT490zRdh1C8xA%3D"
 			(at 182.88 80.01 0)
 			(effects
 				(font
@@ -7129,7 +7129,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "755-SML-S13UTT68"
 			(at 190.5 86.36 0)
 			(effects
 				(font
@@ -7146,7 +7146,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/ROHM-Semiconductor/SML-S13UTT68?qs=sGAEpiMZZMsl8UZd3ZuU6aSVhrRupcD2Jk4wLvHtCCfw%2Fa%252BWoLhlIQ%3D%3D"
 			(at 190.5 80.01 0)
 			(effects
 				(font
@@ -7292,7 +7292,7 @@
 				)
 			)
 		)
-		(property "Value" "1k"
+		(property "Value" "708-RNAN0805BKE1K00"
 			(at 60.706 90.932 0)
 			(effects
 				(font
@@ -7309,7 +7309,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/SEI-Stackpole/RNAN0805BKE1K00?qs=sGAEpiMZZMtlubZbdhIBILBsAZ06Y%2Fzi26na1WyXdT4%3D"
 			(at 55.88 90.17 0)
 			(effects
 				(font
@@ -7439,7 +7439,7 @@
 				)
 			)
 		)
-		(property "Value" "1k"
+		(property "Value" "708-RNAN0805BKE1K00"
 			(at 60.706 111.252 0)
 			(effects
 				(font
@@ -7456,7 +7456,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/SEI-Stackpole/RNAN0805BKE1K00?qs=sGAEpiMZZMtlubZbdhIBILBsAZ06Y%2Fzi26na1WyXdT4%3D"
 			(at 55.88 110.49 0)
 			(effects
 				(font
@@ -7513,7 +7513,7 @@
 				)
 			)
 		)
-		(property "Value" "SS54"
+		(property "Value" "750-SS54BF-HF"
 			(at 101.9175 41.91 0)
 			(effects
 				(font
@@ -7530,7 +7530,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
+		(property "Datasheet" "https://www.mouser.tw/ProductDetail/Comchip-Technology/SS54BF-HF?qs=GBLSl2AkirsPcLFwlU2Ctg%3D%3D"
 			(at 101.6 45.72 0)
 			(effects
 				(font
