@@ -37,9 +37,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.8,
-          "height": 1.27,
-          "width": 2.54
+          "drill": 0.0,
+          "height": 1.7,
+          "width": 0.6
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -412,7 +412,7 @@
       "duplicate_sheet_names": "error",
       "endpoint_off_grid": "warning",
       "extra_units": "error",
-      "footprint_filter": "ignore",
+      "footprint_filter": "warning",
       "footprint_link_issues": "warning",
       "four_way_junction": "ignore",
       "global_label_dangling": "warning",
@@ -431,14 +431,14 @@
       "no_connect_dangling": "warning",
       "pin_not_connected": "error",
       "pin_not_driven": "error",
-      "pin_to_pin": "warning",
-      "power_pin_not_driven": "error",
+      "pin_to_pin": "ignore",
+      "power_pin_not_driven": "ignore",
       "same_local_global_label": "warning",
       "similar_label_and_power": "warning",
       "similar_labels": "warning",
       "similar_power": "warning",
-      "simulation_model_issue": "ignore",
-      "single_global_label": "ignore",
+      "simulation_model_issue": "warning",
+      "single_global_label": "error",
       "unannotated": "error",
       "unconnected_wire_endpoint": "warning",
       "undefined_netclass": "error",
@@ -479,7 +479,14 @@
     "meta": {
       "version": 4
     },
-    "net_colors": null,
+    "net_colors": {
+      "+3.3V": "rgb(255, 0, 3)",
+      "+USB_5V": "rgb(255, 14, 0)",
+      "BUCK_5V": "rgb(255, 0, 9)",
+      "GND": "rgb(10, 255, 0)",
+      "PG_BUCK": "rgb(255, 217, 0)",
+      "V_BAT+": "rgb(255, 29, 0)"
+    },
     "netclass_assignments": null,
     "netclass_patterns": []
   },
@@ -656,10 +663,6 @@
     [
       "0e89ccf9-d74d-4ae0-b837-8fd101d495c0",
       "Root"
-    ],
-    [
-      "16642630-3ce6-4b20-ac8b-55ac2b40aa78",
-      "Deployment Board"
     ]
   ],
   "text_variables": {}

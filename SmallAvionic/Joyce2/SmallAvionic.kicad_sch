@@ -9093,6 +9093,14 @@
 		(uuid "fe113743-d4ef-4264-b4c4-cb068f6005ec")
 	)
 	(no_connect
+		(at 269.24 60.96)
+		(uuid "066251fc-97ab-4376-a04f-89f1c02a73ae")
+	)
+	(no_connect
+		(at 109.22 118.11)
+		(uuid "49f81913-1d65-4a5c-b1af-305494a685c6")
+	)
+	(no_connect
 		(at 160.02 156.21)
 		(uuid "5f6ccb22-7311-4e4e-8d39-a833e75d523a")
 	)
@@ -14973,7 +14981,7 @@
 				)
 			)
 		)
-		(property "Footprint" "10LGA_2X2X0p75_BOS"
+		(property "Footprint" "Small_av_joyce_lib:10LGA_2X2X0p75_BOS"
 			(at 243.84 101.6 0)
 			(effects
 				(font
@@ -15084,7 +15092,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 213.868 227.33 90)
 			(effects
 				(font
@@ -15479,7 +15487,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 166.37 141.478 90)
 			(effects
 				(font
@@ -15564,7 +15572,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 175.26 288.29 0)
 			(effects
 				(font
@@ -15746,7 +15754,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 175.26 132.588 90)
 			(effects
 				(font
@@ -16275,7 +16283,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Package_TO_SOT_SMD:TO-252-2"
 			(at 276.86 342.9 0)
 			(effects
 				(font
@@ -16390,7 +16398,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 217.17 345.44 0)
 			(effects
 				(font
@@ -16747,7 +16755,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Fuse:Fuse_1206_3216Metric_Pad1.42x1.75mm_HandSolder"
 			(at 46.99 331.978 90)
 			(effects
 				(font
@@ -16932,7 +16940,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 165.1 219.202 90)
 			(effects
 				(font
@@ -17018,7 +17026,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 123.19 239.522 90)
 			(effects
 				(font
@@ -17106,7 +17114,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Inductor_SMD:L_0805_2012Metric_Pad1.05x1.20mm_HandSolder"
 			(at 97.79 224.79 0)
 			(effects
 				(font
@@ -17325,7 +17333,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_USB:USB_C_Receptacle_HCTL_HC-TYPE-C-16P-01A"
 			(at 148.59 140.97 0)
 			(effects
 				(font
@@ -17457,7 +17465,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 229.87 328.422 90)
 			(effects
 				(font
@@ -17545,7 +17553,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Inductor_SMD:L_0805_2012Metric_Pad1.05x1.20mm_HandSolder"
 			(at 144.78 347.218 90)
 			(effects
 				(font
@@ -17697,7 +17705,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 303.022 151.13 90)
 			(effects
 				(font
@@ -18071,7 +18079,7 @@
 				)
 			)
 		)
-		(property "Footprint" "VQFN-HR9_RQF_TEX"
+		(property "Footprint" "Small_av_joyce_lib:VQFN-HR9_RQF_TEX"
 			(at 156.21 223.52 0)
 			(effects
 				(font
@@ -18179,7 +18187,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Crystal:Crystal_SMD_0603-4Pin_6.0x3.5mm_HandSoldering"
 			(at 144.78 86.36 0)
 			(effects
 				(font
@@ -18199,26 +18207,6 @@
 		)
 		(property "Description" "Four pin crystal, GND on pins 2 and 4"
 			(at 144.78 86.36 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property private "KLC_S3.3" "The rectangle is not a symbol body but a graphical element"
-			(at 144.78 99.06 0)
-			(show_name yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property private "KLC_S4.1" "Some pins are on 50mil grid to make the symbol small"
-			(at 144.78 101.6 0)
-			(show_name yes)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -18424,7 +18412,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 225.552 151.13 90)
 			(effects
 				(font
@@ -18579,7 +18567,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 149.352 93.98 90)
 			(effects
 				(font
@@ -18665,7 +18653,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 175.26 131.572 90)
 			(effects
 				(font
@@ -18950,7 +18938,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 287.528 118.11 90)
 			(effects
 				(font
@@ -19037,7 +19025,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 167.64 286.512 90)
 			(effects
 				(font
@@ -19125,7 +19113,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "TerminalBlock_MetzConnect:TerminalBlock_MetzConnect_360271_1x01_Horizontal_ScrewM3.0_Boxed"
 			(at 265.43 276.86 0)
 			(effects
 				(font
@@ -19209,7 +19197,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 108.712 346.71 90)
 			(effects
 				(font
@@ -19541,7 +19529,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 243.078 39.37 90)
 			(effects
 				(font
@@ -19847,7 +19835,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 158.242 226.06 90)
 			(effects
 				(font
@@ -20358,7 +20346,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Button_Switch_SMD:SW_Push_1P1T_NO_CK_PTS125Sx43PSMTR"
 			(at 312.42 337.82 0)
 			(effects
 				(font
@@ -20578,7 +20566,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 90.932 224.79 90)
 			(effects
 				(font
@@ -20665,7 +20653,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Diode_SMD:D_SMA-SMB_Universal_Handsoldering"
 			(at 54.61 336.55 0)
 			(effects
 				(font
@@ -20750,7 +20738,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 175.26 298.45 0)
 			(effects
 				(font
@@ -21001,7 +20989,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 263.652 350.52 90)
 			(effects
 				(font
@@ -21153,7 +21141,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 321.818 293.37 90)
 			(effects
 				(font
@@ -21239,7 +21227,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Inductor_SMD:L_0805_2012Metric_Pad1.05x1.20mm_HandSolder"
 			(at 109.22 231.902 90)
 			(effects
 				(font
@@ -21326,7 +21314,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 61.722 342.9 90)
 			(effects
 				(font
@@ -21917,7 +21905,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 169.672 151.13 90)
 			(effects
 				(font
@@ -22072,7 +22060,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 229.87 343.662 90)
 			(effects
 				(font
@@ -22158,7 +22146,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 123.19 48.768 90)
 			(effects
 				(font
@@ -22447,7 +22435,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Button_Switch_SMD:SW_Push_1P1T_NO_CK_PTS125Sx43PSMTR"
 			(at 33.02 92.71 0)
 			(effects
 				(font
@@ -22981,7 +22969,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 259.08 343.662 90)
 			(effects
 				(font
@@ -23376,7 +23364,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 226.568 227.33 90)
 			(effects
 				(font
@@ -23904,7 +23892,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 321.818 279.4 90)
 			(effects
 				(font
@@ -23995,7 +23983,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_Molex:Molex_Micro-Fit_3.0_43650-0221_1x02_P3.00mm_Vertical"
 			(at 31.75 330.2 0)
 			(effects
 				(font
@@ -24170,7 +24158,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 167.64 296.672 90)
 			(effects
 				(font
@@ -24456,7 +24444,7 @@
 				)
 			)
 		)
-		(property "Footprint" "MMC5983MA_MEM"
+		(property "Footprint" "Small_av_joyce_lib:MMC5983MA_MEM"
 			(at 232.41 158.75 0)
 			(effects
 				(font
@@ -24895,7 +24883,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
 			(at 217.17 330.2 0)
 			(effects
 				(font
@@ -25406,7 +25394,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_JST:JST_GH_BM03B-GHS-TBT_1x03-1MP_P1.25mm_Vertical"
 			(at 278.13 293.37 0)
 			(effects
 				(font
@@ -25696,7 +25684,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 109.22 235.712 90)
 			(effects
 				(font
@@ -26078,7 +26066,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 105.41 339.598 90)
 			(effects
 				(font
@@ -26251,7 +26239,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 166.37 143.002 90)
 			(effects
 				(font
@@ -26561,7 +26549,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.00mm:PinSocket_1x04_P2.00mm_Vertical"
 			(at 58.42 153.67 0)
 			(effects
 				(font
@@ -27311,7 +27299,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 29.972 127 90)
 			(effects
 				(font
@@ -27487,7 +27475,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_JST:JST_EH_B4B-EH-A_1x04_P2.50mm_Vertical"
 			(at 220.98 299.72 0)
 			(effects
 				(font
@@ -27648,7 +27636,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Buzzer_Beeper:Buzzer_15x7.5RM7.6"
 			(at 277.495 330.2 90)
 			(effects
 				(font
@@ -27735,7 +27723,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 37.592 127 90)
 			(effects
 				(font
@@ -28366,7 +28354,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 241.808 220.98 90)
 			(effects
 				(font
@@ -28518,7 +28506,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 227.838 39.37 90)
 			(effects
 				(font
@@ -28604,7 +28592,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.00mm:PinSocket_1x02_P2.00mm_Vertical"
 			(at 55.88 118.11 0)
 			(effects
 				(font
@@ -28794,48 +28782,6 @@
 				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0"
 					(reference "#PWR021")
 					(unit 1)
-				)
-			)
-		)
-	)
-	(sheet
-		(at 454.66 20.32)
-		(size 104.14 60.96)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0.0000)
-		)
-		(uuid "16642630-3ce6-4b20-ac8b-55ac2b40aa78")
-		(property "Sheetname" "Deployment Board"
-			(at 454.66 19.6084 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "deployment_board.kicad_sch.kicad_sch"
-			(at 454.66 81.8646 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "SmallAvionic"
-				(path "/0e89ccf9-d74d-4ae0-b837-8fd101d495c0"
-					(page "2")
 				)
 			)
 		)
