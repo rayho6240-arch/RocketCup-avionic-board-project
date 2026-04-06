@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Small_av_joyce_lib")(type "KiCad")(uri "${KIPRJMOD}/Small_av_joyce_lib.pretty")(options "")(descr ""))
+)
