@@ -508,7 +508,7 @@
       "plot": "garber_power_new/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "power layer.step",
+      "step": "../../../power layer.step",
       "svg": "",
       "vrml": ""
     },

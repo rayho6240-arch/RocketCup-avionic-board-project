@@ -522,7 +522,7 @@
       "plot": "garber/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "top_layer.step",
+      "step": "../../../top_layer.step",
       "svg": "",
       "vrml": ""
     },
