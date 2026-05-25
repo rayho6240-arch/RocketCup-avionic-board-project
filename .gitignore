@@ -8,13 +8,18 @@
 *_backups/
 *.tmp
 *.lck
-fp-info-cache    # Footprint 快取
+# Footprint 快取
+fp-info-cache
 
 # --- KiCad 6/7/8 備份與個人設定檔 ---
-*.kicad_sch-bak  # 原理圖自動備份檔
-*.kicad_pcb-bak  # PCB版自動備份檔
-*.kicad_prl      # 個人視窗設定與配置 (不傳版控以防不同螢幕配置衝突)
-*.kicad_user     # 個人偏好設定
+# 原理圖自動備份檔
+*.kicad_sch-bak
+# PCB版自動備份檔
+*.kicad_pcb-bak
+# 個人視窗設定與配置 (不傳版控以防不同螢幕配置衝突)
+*.kicad_prl
+# 個人偏好設定
+*.kicad_user
 
 # --- 輸出檔案 (通常不進版控，若要放 Gerber 可手動解除) ---
 gbers/
@@ -26,13 +31,18 @@ plots/
 *.drl
 
 # --- 作業系統垃圾檔案 ---
-.DS_Store        # macOS Finder 配置檔 (全局遞迴忽略)
-Thumbs.db        # Windows 縮圖快取檔
+# macOS Finder 配置檔 (全局遞迴忽略)
+.DS_Store
+# Windows 縮圖快取檔
+Thumbs.db
 
 # --- 編輯器與開發環境設定 ---
-.vscode/         # VS Code 個人設定檔
-.idea/           # JetBrains 編輯器設定
-.ipynb_checkpoints/ # Jupyter Notebook 快取
+# VS Code 個人設定檔
+.vscode/
+# JetBrains 編輯器設定
+.idea/
+# Jupyter Notebook 快取
+.ipynb_checkpoints/
 
 # --- Python 虛擬環境與快取 ---
 __pycache__/
