@@ -52,3 +52,19 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# --- STM32CubeIDE / GCC 編譯產出與暫存檔 ---
+# 編譯輸出資料夾
+Debug/
+Release/
+# 中間編譯產物
+*.o
+*.d
+*.su
+*.cyclo
+# 執行與燒錄二進位檔案
+*.elf
+*.map
+*.hex
+*.bin
+*.list
