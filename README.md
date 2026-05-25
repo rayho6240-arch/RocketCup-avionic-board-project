@@ -94,6 +94,36 @@ Git 很擅長合併程式碼，但**非常不擅長合併二進位/圖形化的 
 ### Q2: 為什麼有些備份檔 (`.bak`, `-bak`) 傳不上去？
 這是正常的！我們在 `.gitignore` 中設定了過濾，這些是不需要的暫存備份檔。
 
+## 🛠️ 輕量化 STM32 開發與編譯指南 (VS Code / Antigravity IDE)
+
+現在，您和組員**完全不需要打開重型的 STM32CubeIDE**，就能在 VS Code / Antigravity IDE 中進行大航電主控專案 [Main_AV_F407](file:///Users/laizhiquan/coding/RocketCom/Main_AV_F407/) 的極速編譯與硬體單步除錯！
+
+### 1️⃣ 安裝本機編譯工具鏈 (Toolchain)
+在您的 Mac 電腦上，我們已為您透過 Homebrew 安裝好了 GNU ARM 交叉編譯器：
+```bash
+# 安裝 ARM GCC 編譯器 (已經為您下載並安裝好！)
+brew install --cask gcc-arm-none-eabi
+```
+
+### 2️⃣ 在 IDE 終端機進行極速編譯 (Makefile 模式)
+在我們的 `Main_AV_F407` 專案下，已配置好了 GCC 編譯環境：
+1. 在本 IDE 中開啟終端機，切換到 `Main_AV_F407` 目錄：
+   ```bash
+   cd Main_AV_F407
+   ```
+2. 執行編譯（使用 4 核心並行編譯，速度極快）：
+   ```bash
+   make -j4
+   ```
+3. 編譯成功後，會在 `Main_AV_F407/Debug/` 目錄下自動產生以下執行與燒錄檔（且已被 `.gitignore` 自動忽略，不佔用倉庫）：
+   - `bigav_407.elf` (用於除錯)
+   - `bigav_407.hex` / `bigav_407.bin` (用於燒錄)
+
+### 3️⃣ 一鍵燒錄與實體單步除錯 (Debug)
+推薦在 IDE 中安裝 **Cortex-Debug** 擴充套件，並在專案根目錄 `.vscode/launch.json` 中配置 ST-LINK 除錯器，即可在 IDE 中按下 **F5** 實作 ST-Link 一鍵燒錄與中斷點除錯。
+
+*(註：若您未來在 `.ioc` 中新增或修改了硬體引腳，僅需打開 `Main_AV_F407.ioc` 點擊儲存重新 Generate 即可，其餘日常編碼、編譯與燒錄皆可在本 IDE 內快速完成！)*
+
 ---
 
 ## 🔧 環境設定檢查
