@@ -1,0 +1,80 @@
+{
+   "file_counts" : 15,
+   "file_list" : [
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-B_Cu.gbl",
+         "layer_name" : "bl"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-B_Mask.gbs",
+         "layer_name" : "bs"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-B_Paste.gbp",
+         "layer_name" : "bp"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-B_Silkscreen.gbo",
+         "layer_name" : "bo"
+      },
+      {
+         "file_describe_code" : 2,
+         "file_name" : "lora-Edge_Cuts.gm1",
+         "layer_name" : "gko"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-F_Cu.gtl",
+         "layer_name" : "tl"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-F_Mask.gts",
+         "layer_name" : "ts"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-F_Paste.gtp",
+         "layer_name" : "tp"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-F_Silkscreen.gto",
+         "layer_name" : "to"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-In1_Cu.g1",
+         "layer_name" : "l2"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-In2_Cu.g2",
+         "layer_name" : "l3"
+      },
+      {
+         "file_describe_code" : 3,
+         "file_name" : "lora-NPTH-drl_map.gbr",
+         "layer_name" : "dd"
+      },
+      {
+         "file_describe_code" : 4,
+         "file_name" : "lora-NPTH.drl",
+         "layer_name" : "nil"
+      },
+      {
+         "file_describe_code" : 3,
+         "file_name" : "lora-PTH-drl_map.gbr",
+         "layer_name" : "dd1"
+      },
+      {
+         "file_describe_code" : 0,
+         "file_name" : "lora-PTH.drl",
+         "layer_name" : "drl"
+      }
+   ]
+}
