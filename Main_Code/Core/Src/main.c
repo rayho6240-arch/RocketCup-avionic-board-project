@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bmi088.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -1134,7 +1135,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+int _write(int file, char *ptr, int len)
+{
+  HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+  return len;
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1153,10 +1158,17 @@ void StartDefaultTask(void *argument)
     // 讀取 BMI088 (SPI2) 加速度與角速度數據
     BMI088_ReadData(&hspi2, &imu_data);
     
+    // 透過 USART2 (printf) 噴出資料，格式: ax,ay,az
+    // 為防 STM32CubeIDE 預設未啟用 %f 浮點列印，乘上 1000 以毫重力 (milli-g) 整數形式輸出，最穩健！
+    printf("%d,%d,%d\r\n", 
+           (int)(imu_data.ax * 1000.0f), 
+           (int)(imu_data.ay * 1000.0f), 
+           (int)(imu_data.az * 1000.0f));
+    
     // 閃爍系統 LED 表示工作正常
     HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
     
-    // 以 100Hz (10ms) 或 50Hz (20ms) 頻率讀取數據
+    // 以 50Hz 頻率發送數據 (20ms)
     osDelay(20);
   }
   /* USER CODE END 5 */
