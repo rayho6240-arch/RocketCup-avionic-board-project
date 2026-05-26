@@ -1,0 +1,10 @@
+00:01:20 **** Incremental Build of configuration Debug for project GPSandMagn_driver ****
+make -j22 all 
+arm-none-eabi-size  GPSandMagn_driver.elf 
+   text	   data	    bss	    dec	    hex	filename
+  15244	     12	   1820	  17076	   42b4	GPSandMagn_driver.elf
+Finished building: default.size.stdout
+ 
+
+00:01:21 Build Finished. 0 errors, 0 warnings. (took 331ms)
+

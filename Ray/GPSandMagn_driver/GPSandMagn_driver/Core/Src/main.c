@@ -25,6 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "mag.h"
 
 /* USER CODE END Includes */
 
@@ -35,6 +36,21 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define LED_MAG_READ_OK_BLINK_MS        (50U)
+#define LED_MAG_READ_FAIL_BLINK_TIMES   (3U)
+#define LED_MAG_READ_FAIL_BLINK_MS      (80U)
+#define MAG_READ_PERIOD_MS              (500U)
+#define LED_ACTIVE_HIGH                 (1U)
+#define LED_ACTIVE_LOW                  (0U)
+#define LED_ACTIVE_POLARITY             LED_ACTIVE_HIGH
+
+#if (LED_ACTIVE_POLARITY == LED_ACTIVE_HIGH)
+#define LED_ON_STATE                    GPIO_PIN_SET
+#define LED_OFF_STATE                   GPIO_PIN_RESET
+#else
+#define LED_ON_STATE                    GPIO_PIN_RESET
+#define LED_OFF_STATE                   GPIO_PIN_SET
+#endif
 
 /* USER CODE END PD */
 
@@ -46,12 +62,19 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static bool mag_ready;
+static int32_t mag_raw_x;
+static int32_t mag_raw_y;
+static int32_t mag_raw_z;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void LED_On(void);
+static void LED_Off(void);
+static void LED_Blink(uint8_t times, uint16_t delay_ms);
 
 /* USER CODE END PFP */
 
@@ -93,6 +116,16 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  LED_Off();
+  mag_ready = MAG_Init();
+  if (mag_ready)
+  {
+    LED_On();
+  }
+  else
+  {
+    LED_Off();
+  }
 
   /* USER CODE END 2 */
 
@@ -100,6 +133,19 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    if (mag_ready && MAG_ReadRaw(&mag_raw_x, &mag_raw_y, &mag_raw_z))
+    {
+      LED_Off();
+      HAL_Delay(LED_MAG_READ_OK_BLINK_MS);
+      LED_On();
+    }
+    else
+    {
+      LED_Blink(LED_MAG_READ_FAIL_BLINK_TIMES, LED_MAG_READ_FAIL_BLINK_MS);
+    }
+
+    HAL_Delay(MAG_READ_PERIOD_MS);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -128,14 +174,29 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler();
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  if (RCC_OscInitStruct.PLL.PLLState == RCC_PLL_ON)
+  {
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  }
+  else
+  {
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  }
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
@@ -147,6 +208,26 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void LED_On(void)
+{
+  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, LED_ON_STATE);
+}
+
+static void LED_Off(void)
+{
+  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, LED_OFF_STATE);
+}
+
+static void LED_Blink(uint8_t times, uint16_t delay_ms)
+{
+  for (uint8_t index = 0U; index < times; index++)
+  {
+    LED_On();
+    HAL_Delay(delay_ms);
+    LED_Off();
+    HAL_Delay(delay_ms);
+  }
+}
 
 /* USER CODE END 4 */
 
@@ -175,8 +256,8 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  (void)file;
+  (void)line;
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
