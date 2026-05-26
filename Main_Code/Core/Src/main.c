@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bmi088.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -81,7 +81,7 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-
+BMI088_Data_t imu_data;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -165,7 +165,7 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-
+  BMI088_Init(&hspi2);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -1150,8 +1150,14 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+    // 讀取 BMI088 (SPI2) 加速度與角速度數據
+    BMI088_ReadData(&hspi2, &imu_data);
+    
+    // 閃爍系統 LED 表示工作正常
     HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
-    osDelay(500);
+    
+    // 以 100Hz (10ms) 或 50Hz (20ms) 頻率讀取數據
+    osDelay(20);
   }
   /* USER CODE END 5 */
 }
