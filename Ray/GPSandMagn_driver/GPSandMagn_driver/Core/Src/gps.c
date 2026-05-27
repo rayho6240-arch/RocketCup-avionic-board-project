@@ -1,5 +1,6 @@
 #include "gps.h"
 
+#include "main.h"
 #include "usart.h"
 
 #define GPS_NMEA_LINE_FEED              ('\n')
@@ -30,6 +31,21 @@ bool GPS_Init(void)
   gps_last_byte_was_line_end = false;
 
   return (HAL_UART_Receive_IT(&huart1, &gps_rx_byte, GPS_RX_BYTE_COUNT) == HAL_OK);
+}
+
+void GPS_ResetPin_InitState(void)
+{
+  GPS_ReleaseReset();
+}
+
+void GPS_ReleaseReset(void)
+{
+  HAL_GPIO_WritePin(RST_GPS_GPIO_Port, RST_GPS_Pin, GPIO_PIN_SET);
+}
+
+void GPS_HoldReset(void)
+{
+  HAL_GPIO_WritePin(RST_GPS_GPIO_Port, RST_GPS_Pin, GPIO_PIN_RESET);
 }
 
 void GPS_ProcessByte(uint8_t byte)

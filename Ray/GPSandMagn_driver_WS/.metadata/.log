@@ -474,3 +474,31 @@ Caused by: java.nio.channels.UnresolvedAddressException
 	at java.base/java.security.AccessController.doPrivileged(AccessController.java:571)
 	at java.net.http/jdk.internal.net.http.PlainHttpConnection.connectAsync(PlainHttpConnection.java:212)
 	... 21 more
+!SESSION 2026-05-27 07:16:07.519 -----------------------------------------------
+eclipse.buildId=Version 2.1.1
+java.version=21.0.9
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=zh_TW
+Framework arguments:  D:\isp_avonic\Iusbubula_Avionic_Board\Ray\GPSandMagn_driver\GPSandMagn_driver\.project
+Command-line arguments:  -os win32 -ws win32 -arch x86_64 D:\isp_avonic\Iusbubula_Avionic_Board\Ray\GPSandMagn_driver\GPSandMagn_driver\.project
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-05-27 07:16:19.204
+!MESSAGE Log4j2 initialized with config file D:\isp_avonic\Iusbubula_Avionic_Board\Ray\GPSandMagn_driver_WS\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-05-27 07:16:35.002
+!MESSAGE Started RMI Server, listening on port 41337
+
+!ENTRY org.eclipse.cdt.core 1 0 2026-05-27 07:16:39.331
+!MESSAGE Indexed 'GPSandMagn_driver' (27 sources, 117 headers) in 3.45 sec: 8,958 declarations; 44,413 references; 2 unresolved inclusions; 36 syntax errors; 188 unresolved names (0.35%)
+
+!ENTRY com.st.stm32cube.ide.mpu.remote.serial 1 1 2026-05-27 07:16:43.271
+!MESSAGE Executed PowerShell command powershell.exe -Command "Get-CimInstance -ClassName Win32_SerialPort | Select-Object -ExpandProperty DeviceID":
+COM3
+COM4
+
+
+!ENTRY com.st.stm32cube.ide.mpu.remote.serial 1 1 2026-05-27 07:16:43.272
+!MESSAGE port: COM3
+
+!ENTRY com.st.stm32cube.ide.mpu.remote.serial 1 1 2026-05-27 07:16:43.273
+!MESSAGE port: COM4
