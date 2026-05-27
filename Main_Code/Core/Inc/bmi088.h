@@ -57,9 +57,29 @@ typedef struct {
     float gz;
 } BMI088_Data_t;
 
+typedef struct {
+    int16_t accel_x_raw;
+    int16_t accel_y_raw;
+    int16_t accel_z_raw;
+    float ax;
+    float ay;
+    float az;
+} BMI088_Accel_t;
+
+typedef struct {
+    int16_t gyro_x_raw;
+    int16_t gyro_y_raw;
+    int16_t gyro_z_raw;
+    float gx;
+    float gy;
+    float gz;
+} BMI088_Gyro_t;
+
 /* --- Function Prototypes --- */
 HAL_StatusTypeDef BMI088_Init(SPI_HandleTypeDef *hspi);
 HAL_StatusTypeDef BMI088_ReadData(SPI_HandleTypeDef *hspi, BMI088_Data_t *data);
+HAL_StatusTypeDef BMI088_ReadAccel(SPI_HandleTypeDef *hspi, BMI088_Accel_t *data);
+HAL_StatusTypeDef BMI088_ReadGyro(SPI_HandleTypeDef *hspi, BMI088_Gyro_t *data);
 
 #ifdef __cplusplus
 }

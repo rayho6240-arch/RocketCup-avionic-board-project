@@ -129,8 +129,8 @@ HAL_StatusTypeDef BMI088_Init(SPI_HandleTypeDef *hspi)
     status = Gyro_Reg_Write(hspi, BMI088_GYRO_RANGE_REG, 0x00);    // 0x00 = ±2000 °/s
     HAL_Delay(10);
 
-    // 設定陀螺儀輸出頻率與帶寬：1000Hz ODR, 帶寬 116Hz
-    status = Gyro_Reg_Write(hspi, BMI088_GYRO_BANDWIDTH_REG, 0x02);
+    // 設定陀螺儀輸出頻率與帶寬：2000Hz ODR, 帶寬 532Hz (官方最高 ODR)
+    status = Gyro_Reg_Write(hspi, BMI088_GYRO_BANDWIDTH_REG, 0x00); // 0x00 = 2000Hz ODR, 532Hz BW
     HAL_Delay(10);
 
     return HAL_OK;
@@ -158,6 +158,7 @@ HAL_StatusTypeDef BMI088_ReadData(SPI_HandleTypeDef *hspi, BMI088_Data_t *data)
     data->accel_z_raw = (int16_t)((rx_data[7] << 8) | rx_data[6]);
 
     // 換算成物理加速度 (單位: g)。±24g 下靈敏度為 1365 LSB/g (32768 / 24)
+    // 備註：因 PCB 上標示相反，實際使用解算時 X 與 Y 應取負值以做軸向修正
     data->ax = (float)data->accel_x_raw * 24.0f / 32768.0f;
     data->ay = (float)data->accel_y_raw * 24.0f / 32768.0f;
     data->az = (float)data->accel_z_raw * 24.0f / 32768.0f;
@@ -177,6 +178,58 @@ HAL_StatusTypeDef BMI088_ReadData(SPI_HandleTypeDef *hspi, BMI088_Data_t *data)
     data->gyro_z_raw = (int16_t)((rx_data[6] << 8) | rx_data[5]);
 
     // 換算成角速度 (單位: deg/s)。±2000°/s 下靈敏度為 16.384 LSB/(deg/s) (32768 / 2000)
+    // 備註：配合 X、Y 加速度計之軸向修正，實際使用解算時 GX 與 GY 亦應取負值
+    data->gx = (float)data->gyro_x_raw * 2000.0f / 32768.0f;
+    data->gy = (float)data->gyro_y_raw * 2000.0f / 32768.0f;
+    data->gz = (float)data->gyro_z_raw * 2000.0f / 32768.0f;
+
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef BMI088_ReadAccel(SPI_HandleTypeDef *hspi, BMI088_Accel_t *data)
+{
+    HAL_StatusTypeDef status;
+    uint8_t tx_data[8] = {0};
+    uint8_t rx_data[8] = {0};
+
+    tx_data[0] = BMI088_ACC_DATA_REG | 0x80;
+    tx_data[1] = 0x00; // Dummy byte
+
+    HAL_GPIO_WritePin(ACCEL_CS_PORT, ACCEL_CS_PIN, GPIO_PIN_RESET);
+    status = HAL_SPI_TransmitReceive(hspi, tx_data, rx_data, 8, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(ACCEL_CS_PORT, ACCEL_CS_PIN, GPIO_PIN_SET);
+
+    if (status != HAL_OK) return status;
+
+    data->accel_x_raw = (int16_t)((rx_data[3] << 8) | rx_data[2]);
+    data->accel_y_raw = (int16_t)((rx_data[5] << 8) | rx_data[4]);
+    data->accel_z_raw = (int16_t)((rx_data[7] << 8) | rx_data[6]);
+
+    data->ax = (float)data->accel_x_raw * 24.0f / 32768.0f;
+    data->ay = (float)data->accel_y_raw * 24.0f / 32768.0f;
+    data->az = (float)data->accel_z_raw * 24.0f / 32768.0f;
+
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef BMI088_ReadGyro(SPI_HandleTypeDef *hspi, BMI088_Gyro_t *data)
+{
+    HAL_StatusTypeDef status;
+    uint8_t tx_data[7] = {0};
+    uint8_t rx_data[7] = {0};
+
+    tx_data[0] = BMI088_GYRO_DATA_REG | 0x80;
+
+    HAL_GPIO_WritePin(GYRO_CS_PORT, GYRO_CS_PIN, GPIO_PIN_RESET);
+    status = HAL_SPI_TransmitReceive(hspi, tx_data, rx_data, 7, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GYRO_CS_PORT, GYRO_CS_PIN, GPIO_PIN_SET);
+
+    if (status != HAL_OK) return status;
+
+    data->gyro_x_raw = (int16_t)((rx_data[2] << 8) | rx_data[1]);
+    data->gyro_y_raw = (int16_t)((rx_data[4] << 8) | rx_data[3]);
+    data->gyro_z_raw = (int16_t)((rx_data[6] << 8) | rx_data[5]);
+
     data->gx = (float)data->gyro_x_raw * 2000.0f / 32768.0f;
     data->gy = (float)data->gyro_y_raw * 2000.0f / 32768.0f;
     data->gz = (float)data->gyro_z_raw * 2000.0f / 32768.0f;
