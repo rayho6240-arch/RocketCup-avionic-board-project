@@ -16,6 +16,9 @@ extern volatile bool gps_byte_received_flag;
 extern volatile bool gps_uart_error_flag;
 
 bool GPS_Init(void);
+void GPS_ResetPin_InitState(void);
+void GPS_ReleaseReset(void);
+void GPS_HoldReset(void);
 void GPS_ProcessByte(uint8_t byte);
 bool GPS_HasReceivedByte(void);
 void GPS_ClearReceivedByteFlag(void);

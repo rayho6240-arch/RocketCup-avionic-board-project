@@ -1,135 +1,114 @@
 # Change Log
 
-## Latest Patch: MMC5983MA Raw XYZ Read
+## Latest Patch: GPS RX 10-Second Timeout LED Logic
 
-Goal: go beyond Product ID detection and verify that MMC5983MA can perform a magnetic measurement and return raw XYZ data.
+Finding and reason:
 
-No existing DMA, GPS, I2C, or USART structure was deleted.
+- With `RST_GPS` disconnected, GPS UART data is received.
+- With `RST_GPS` connected, no UART bytes are received.
+- After reset handling was fixed, LED still showed mixed slow/fast blink.
+- The old 1-second no-byte check was too sensitive.
 
-## Hardware Assumptions
+## Reset Pin
 
-- MCU: STM32F103C8T6
-- Magnetometer: MMC5983MA
-- I2C1 SCL: PB6
-- I2C1 SDA: PB7
-- I2C speed: 100 kHz
-- LED_debug: PB11
-- Debug output: LED only
-
-## Files Modified
-
-- `Core/Inc/mag.h`
-- `Core/Src/mag.c`
-- `Core/Src/main.c`
-- `change.md`
-
-## MAG API
+CubeMX generated:
 
 ```c
-bool MAG_Init(void);
-bool MAG_ReadProductID(uint8_t *id);
-bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz);
+#define RST_GPS_Pin        GPIO_PIN_9
+#define RST_GPS_GPIO_Port  GPIOB
 ```
 
-## MMC5983MA Registers
+The firmware uses these CubeMX names. It does not hardcode the reset GPIO in GPS reset control.
+
+Assumption:
+
+- NEO-M9N reset is active-low.
+- LOW means hold reset.
+- HIGH means release reset.
+
+## GPS Reset API
+
+Added to `gps.h` / `gps.c`:
 
 ```c
-#define MMC5983MA_I2C_ADDR_7BIT         (0x30U)
-#define MMC5983MA_I2C_ADDR              (MMC5983MA_I2C_ADDR_7BIT << 1U)
-#define MMC5983MA_STATUS_REG            (0x08U)
-#define MMC5983MA_CONTROL_0_REG         (0x09U)
-#define MMC5983MA_XOUT0_REG             (0x00U)
-#define MMC5983MA_PRODUCT_ID_REG        (0x2FU)
-#define MMC5983MA_PRODUCT_ID_EXPECTED   (0x30U)
-#define MMC5983MA_STATUS_MEAS_M_DONE    (0x01U)
-#define MMC5983MA_CONTROL_0_TM_M        (0x01U)
+void GPS_ResetPin_InitState(void);
+void GPS_ReleaseReset(void);
+void GPS_HoldReset(void);
 ```
 
-## MAG_ReadRaw Flow
+Behavior:
 
-`MAG_ReadRaw()` does:
+```c
+GPS_HoldReset();     // RST_GPS = LOW
+GPS_ReleaseReset();  // RST_GPS = HIGH
+```
 
-1. Writes `TM_M = 1` to `CONTROL_0` register `0x09`.
-2. Polls `STATUS` register `0x08`.
-3. Waits until `MEAS_M_DONE` bit0 becomes `1`.
-4. Times out after 100 ms.
-5. Reads 7 bytes starting at `XOUT0` register `0x00`.
-6. Combines X/Y/Z as unsigned 18-bit raw values:
-   - X: `XOUT0`, `XOUT1`, `XYZOUT2[7:6]`
-   - Y: `YOUT0`, `YOUT1`, `XYZOUT2[5:4]`
-   - Z: `ZOUT0`, `ZOUT1`, `XYZOUT2[3:2]`
+## GPIO Init Change
 
-## Main Behavior
+`MX_GPIO_Init()` now sets `RST_GPS` HIGH by default.
 
-Initialization order remains:
+This prevents the GPS from being held in reset immediately after GPIO initialization.
+
+Note:
+
+- Current firmware assumes push-pull output.
+- If the NEO-M9N reset line requires open-drain with an external pull-up, change only the `RST_GPS` pin mode in CubeMX/GPIO config.
+
+## Main Init Order
+
+Current startup sequence:
 
 ```c
 HAL_Init();
 SystemClock_Config();
 MX_GPIO_Init();
+GPS_ReleaseReset();
+HAL_Delay(500);
 MX_DMA_Init();
 MX_I2C1_Init();
 MX_USART1_UART_Init();
+GPS_Init();
 ```
 
-Then `MAG_Init()` runs once.
+The 500 ms delay gives the GPS time after reset release before USART RX interrupt listening starts.
 
-In `while (1)`, every 500 ms:
+## LED Debug Logic
 
-- If `MAG_ReadRaw(&mag_raw_x, &mag_raw_y, &mag_raw_z)` succeeds:
-  - LED is normally ON.
-  - LED turns OFF for 50 ms.
-  - LED turns ON again.
+The GPS byte counter LED debug now uses a 10-second no-data timeout.
 
-- If `MAG_ReadRaw()` fails:
+Tracked state in `main.c`:
+
+```c
+last_gps_rx_byte_count
+last_gps_rx_time_ms
+last_gps_alive_blink_ms
+```
+
+Behavior:
+
+- If `gps_rx_byte_count` increases:
+  - `last_gps_rx_time_ms = HAL_GetTick()`
+  - GPS is considered alive.
+  - LED slow blinks once per second.
+
+- If `HAL_GetTick() - last_gps_rx_time_ms > 10000`:
+  - No UART byte was received for 10 continuous seconds.
   - LED fast blinks 3 times.
-
-## LED Polarity
-
-`main.c` supports active-high and active-low LED wiring:
-
-```c
-#define LED_ACTIVE_HIGH                 (1U)
-#define LED_ACTIVE_LOW                  (0U)
-#define LED_ACTIVE_POLARITY             LED_ACTIVE_HIGH
-```
-
-All LED operations go through:
-
-```c
-LED_On();
-LED_Off();
-LED_Blink();
-```
-
-All LED GPIO access uses CubeMX symbols:
-
-- `LED_debug_GPIO_Port`
-- `LED_debug_Pin`
 
 ## Target Interpretation
 
-- LED normally ON with one short OFF pulse every 500 ms:
-  MMC5983MA measurement trigger, status polling, and raw XYZ read are working.
+- LED slow blinks once per second:
+  GPS UART RX is receiving bytes often enough to stay alive.
 
 - LED fast blinks 3 times:
-  Measurement trigger, measurement-done polling, or raw data read failed.
-
-If failure repeats, check:
-
-- PB6 is connected to SCL
-- PB7 is connected to SDA
-- 3.3 V and GND are connected
-- I2C pull-ups are present
-- MMC5983MA address is really `0x30`
-- Status register bit0 becomes `MEAS_M_DONE`
+  No UART byte was received for more than 10 seconds.
 
 ## Constraints Kept
 
 - No `printf`
 - No `malloc`
-- No I2C DMA
-- No interrupt LED blinking
-- GPS files remain in the project
-- USART files remain in the project
-- DMA infrastructure remains in the project
+- No UART DMA receive
+- No GPS parsing
+- No full NMEA wait
+- No `HAL_Delay()` inside interrupt callbacks
+- DMA, I2C, GPS, and USART files remain in the project

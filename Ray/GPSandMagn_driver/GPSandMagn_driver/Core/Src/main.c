@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "mag.h"
+#include "gps.h"
 
 /* USER CODE END Includes */
 
@@ -36,13 +36,15 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define LED_MAG_READ_OK_BLINK_MS        (50U)
-#define LED_MAG_READ_FAIL_BLINK_TIMES   (3U)
-#define LED_MAG_READ_FAIL_BLINK_MS      (80U)
-#define MAG_READ_PERIOD_MS              (500U)
+#define LED_GPS_RX_OK_BLINK_MS          (80U)
+#define LED_GPS_NO_RX_BLINK_TIMES       (3U)
+#define LED_GPS_NO_RX_BLINK_MS          (80U)
+#define GPS_ALIVE_BLINK_PERIOD_MS       (1000U)
+#define GPS_NO_RX_TIMEOUT_MS            (10000U)
 #define LED_ACTIVE_HIGH                 (1U)
 #define LED_ACTIVE_LOW                  (0U)
 #define LED_ACTIVE_POLARITY             LED_ACTIVE_HIGH
+//123
 
 #if (LED_ACTIVE_POLARITY == LED_ACTIVE_HIGH)
 #define LED_ON_STATE                    GPIO_PIN_SET
@@ -62,10 +64,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static bool mag_ready;
-static int32_t mag_raw_x;
-static int32_t mag_raw_y;
-static int32_t mag_raw_z;
+static uint32_t last_gps_rx_byte_count;
+static uint32_t last_gps_rx_time_ms;
+static uint32_t last_gps_alive_blink_ms;
 
 /* USER CODE END PV */
 
@@ -112,20 +113,18 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  GPS_ReleaseReset();
+  HAL_Delay(500U);
   MX_DMA_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   LED_Off();
-  mag_ready = MAG_Init();
-  if (mag_ready)
-  {
-    LED_On();
-  }
-  else
-  {
-    LED_Off();
-  }
+  (void)GPS_Init();
+  last_gps_rx_byte_count = gps_rx_byte_count;
+  last_gps_rx_time_ms = HAL_GetTick();
+  last_gps_alive_blink_ms = HAL_GetTick();
+  LED_On();
 
   /* USER CODE END 2 */
 
@@ -133,18 +132,24 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (mag_ready && MAG_ReadRaw(&mag_raw_x, &mag_raw_y, &mag_raw_z))
+    if (gps_rx_byte_count != last_gps_rx_byte_count)
     {
-      LED_Off();
-      HAL_Delay(LED_MAG_READ_OK_BLINK_MS);
-      LED_On();
-    }
-    else
-    {
-      LED_Blink(LED_MAG_READ_FAIL_BLINK_TIMES, LED_MAG_READ_FAIL_BLINK_MS);
+      last_gps_rx_byte_count = gps_rx_byte_count;
+      last_gps_rx_time_ms = HAL_GetTick();
     }
 
-    HAL_Delay(MAG_READ_PERIOD_MS);
+    if ((HAL_GetTick() - last_gps_rx_time_ms) > GPS_NO_RX_TIMEOUT_MS)
+    {
+      LED_Blink(LED_GPS_NO_RX_BLINK_TIMES, LED_GPS_NO_RX_BLINK_MS);
+      last_gps_alive_blink_ms = HAL_GetTick();
+    }
+    else if ((HAL_GetTick() - last_gps_alive_blink_ms) >= GPS_ALIVE_BLINK_PERIOD_MS)
+    {
+      last_gps_alive_blink_ms = HAL_GetTick();
+      LED_Off();
+      HAL_Delay(LED_GPS_RX_OK_BLINK_MS);
+      LED_On();
+    }
 
     /* USER CODE END WHILE */
 
