@@ -134,3 +134,4 @@ brew install --cask gcc-arm-none-eabi
 git config --global user.name "你的名字(英文)"
 git config --global user.email "你的Email"
 ```
+彩蛋： 唯一不是AIIIIIIII寫的
