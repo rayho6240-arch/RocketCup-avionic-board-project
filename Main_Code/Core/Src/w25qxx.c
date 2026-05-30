@@ -568,3 +568,29 @@ W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
 
 uint32_t FlashRing_GetWriteAddr(void)   { return s_ring_write_addr; }
 uint32_t FlashRing_GetPacketCount(void) { return s_ring_packet_count; }
+
+W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt)
+{
+    if (pkt == NULL) return W25QXX_ERR_PARAM;
+
+    uint32_t last_write_addr = s_ring_write_addr;
+    uint32_t last_packet_addr;
+
+    // 處理環形邊界 wrap-around
+    if (last_write_addr == FLASH_RINGBUF_ADDR) {
+        last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
+    } else {
+        last_packet_addr = last_write_addr - FLASH_RING_PACKET_SIZE;
+    }
+
+    // 從 Flash 中讀取最後一個封包
+    W25QXX_StatusTypeDef ret = W25QXX_ReadData(last_packet_addr, (uint8_t*)pkt, FLASH_RING_PACKET_SIZE);
+    if (ret != W25QXX_OK) return ret;
+
+    // 校驗魔術字節與數據完整性
+    if (pkt->magic[0] == 0xAA && pkt->magic[1] == 0x55) {
+        return W25QXX_OK;
+    }
+
+    return W25QXX_ERR_ID; // 若尚未有任何有效寫入，回傳 ID 錯誤
+}

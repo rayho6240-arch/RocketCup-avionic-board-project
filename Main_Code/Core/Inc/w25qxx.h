@@ -230,6 +230,14 @@ void FlashRing_Init(void);
  * @retval W25QXX_OK 或錯誤碼
  */
 W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt);
+ 
+/**
+ * @brief  邊界安全地提取環形緩衝區中最後一筆寫入的有效數據封包
+ *         用於空中重開機時恢復飛行狀態機
+ * @param  pkt  輸出封包結構體
+ * @retval W25QXX_OK 成功提取, W25QXX_ERR_ID 數據無效或未寫入
+ */
+W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt);
 
 /** @brief 取得目前寫入地址 */
 uint32_t FlashRing_GetWriteAddr(void);

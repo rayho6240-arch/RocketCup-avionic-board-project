@@ -29,8 +29,10 @@
 #include "w25qxx.h"
 #include "w25q128.h"
 #include "rate_monitor.h"  /* 採樣率監測模組，要停用請在 rate_monitor.h 註解 #define RATE_MONITOR_ENABLE */
+#include "ekf.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -90,6 +92,11 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+FlightState_t current_fsm_state = STATE_INIT;
+uint32_t flight_start_tick = 0;
+float last_vel_z = 0.0f;
+uint8_t sd_logging_active = 0;
+
 BMI088_Data_t imu_data;
 ADXL375_Data_t highg_data;
 BMP388_Data_t baro_data;
@@ -100,6 +107,11 @@ uint8_t bmp388_ok = 0;
 
 /* 採樣率監測器：在 IDE Watch / Live Expressions 加入《g_sampling_rate》即可一次觀察所有感測器 */
 SAMPLING_RATE_DECL();   /* 展開為: SamplingRateAll_t g_sampling_rate */
+
+/* --- EKF 1000 Hz Double Buffers in SRAM --- */
+EKF_Buffer_t g_ekf_buffers[2];
+volatile uint8_t g_ekf_active_idx = 0;
+volatile uint8_t g_ekf_sample_count = 0;
 
 /* --- TIM3 (3.2 kHz) ADXL375 Ping-Pong 雙緩衝區宣告 --- */
 #define ADXL_BATCH_SIZE 32
@@ -249,6 +261,9 @@ int main(void)
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI1, CS=PA15) */
   Flash_Test();
+
+  /* Buzzer：啟動 TIM2 CH1 PWM，初始靜音 (CCR1=0) */
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -268,6 +283,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  xEKFQueue = osMessageQueueNew(2, sizeof(EKF_Buffer_t*), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -276,6 +292,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -956,7 +973,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 460800;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -1294,6 +1311,154 @@ int _write(int file, char *ptr, int len)
   HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
   return len;
 }
+
+static void FSM_Update(void)
+{
+    EKF_State_t ekf_state = EKF_GetState();
+    float h_est = ekf_state.pos_z;  // 卡爾曼估計高度 (m)
+    float v_est = ekf_state.vel_z;  // 卡爾曼估計垂直速度 (m/s)
+    float a_z = highg_data.az;      // 高 G 垂直加速度 (g)
+    uint32_t now = HAL_GetTick();
+    static uint32_t state_entered_tick = 0;
+    static float max_altitude = 0.0f;
+    static uint8_t consec_apogee_counts = 0;
+    
+    // 更新觀測到的最大高度
+    if (h_est > max_altitude) {
+        max_altitude = h_est;
+    }
+    
+    switch (current_fsm_state) {
+        case STATE_PAD:
+            // 等待靜態校準完成
+            if (EKF_calibrated) {
+                // 起飛觸發條件：高G加速度 > 3.0g 或是高度 > 10.0m
+                if (a_z > 3.0f || h_est > 10.0f) {
+                    current_fsm_state = STATE_BOOST;
+                    flight_start_tick = now;
+                    state_entered_tick = now;
+                    printf("[FSM] 🚀 LIFTOFF DETECTED! Transition to STATE_BOOST.\r\n");
+                }
+            }
+            break;
+            
+        case STATE_BOOST:
+            // 馬達燒完判定：加速度 < 0.5g 且 flight time > 1.5 秒
+            if (a_z < 0.5f && (now - state_entered_tick) > 1500) {
+                current_fsm_state = STATE_COAST;
+                state_entered_tick = now;
+                printf("[FSM] 🔥 MOTOR BURNOUT! Entering STATE_COAST.\r\n");
+            }
+            break;
+            
+        case STATE_COAST: {
+            // 動態頂點預估 (預估 4.0s 前開副傘)
+            float decel = -9.80665f;
+            if (last_vel_z != 0.0f) {
+                float a_z_nav = (v_est - last_vel_z) / 0.010f; // 10ms 速度差所得加速度
+                if (a_z_nav < -5.0f && a_z_nav > -25.0f) {
+                    decel = a_z_nav;
+                }
+            }
+            
+            float t_to_apogee = -v_est / decel;
+            
+            // 頂點判定條件：
+            // 1. 動態預測時間 <= 4.0s (且仍處於上升狀態 v_est > 0)
+            // 2. 備用安全判定：垂直速度過零 (v_est < -0.2 m/s) 或是高度從峰值下降超過 5.0m
+            // 同時必須滿足起飛時間鎖（起飛後累計大於 3.0 秒）
+            uint8_t apogee_condition = 0;
+            if (v_est > 0.0f && t_to_apogee <= DROGUE_LEAD_TIME_S) {
+                apogee_condition = 1;
+            } else if (v_est < -0.2f || (max_altitude - h_est) > 5.0f) {
+                apogee_condition = 1;
+            }
+            
+            if (apogee_condition && (now - flight_start_tick) > 3000) {
+                consec_apogee_counts++;
+                if (consec_apogee_counts >= 5) { // 連續 5 個週期 (50ms) 成立以防雜訊
+                    current_fsm_state = STATE_APOGEE;
+                    state_entered_tick = now;
+                    printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n", 
+                           t_to_apogee, h_est);
+                    
+                    // 1. 導通副傘引爆 MOSFET (PD13 = HIGH)
+                    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+                }
+            } else {
+                consec_apogee_counts = 0;
+            }
+            break;
+        }
+            
+        case STATE_APOGEE:
+            // 點火限時導通保護：持續導通 2.0 秒後強制拉低
+            if (now - state_entered_tick >= 2000) {
+                HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET); // 斷開點火
+                current_fsm_state = STATE_DESCENT;
+                state_entered_tick = now;
+                printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
+            }
+            break;
+            
+        case STATE_DESCENT: {
+            // 動態主傘部署高度計算：h_trigger = h_target + |v_fall| * t_delay
+            float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
+            float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
+            
+            // 觸發條件：高度低於觸發高度，或是飛行總時間看門狗超時 (25秒)
+            if (h_est <= h_trigger_main || (now - flight_start_tick) > 25000) {
+                current_fsm_state = STATE_MAIN_DEPLOY;
+                state_entered_tick = now;
+                printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n", 
+                       h_est, TARGET_MAIN_ALTITUDE, v_est);
+                
+                // 2. 部署主傘：控制 PD14 釋放舵機 (設 PWM 脈寬為 2000，即釋放角度)
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);
+            }
+            break;
+        }
+            
+        case STATE_MAIN_DEPLOY:
+            // 等待 3 秒讓主傘充氣張開，隨後進入落地偵測
+            if (now - state_entered_tick >= 3000) {
+                current_fsm_state = STATE_LANDED;
+                state_entered_tick = now;
+                printf("[FSM] Main deployed. Entering landing detection.\r\n");
+            }
+            break;
+            
+        case STATE_LANDED:
+            // 落地判定：下墜速度趨近零，且高度小於 20m
+            if (fabsf(v_est) < 0.3f && h_est < 20.0f) {
+                printf("[FSM] 🏁 TOUCHDOWN SUCCESSFUL! Flight telemetry logging safe.\r\n");
+                
+                // 開啟板載尋標蜂鳴器（持續嗶嗶聲）
+                htim2.Instance->ARR  = 999;
+                htim2.Instance->CCR1 = 500;
+                htim2.Instance->EGR  = TIM_EGR_UG;
+                
+                // 安全關閉 SD 卡文件，物理卸載
+                extern uint8_t sd_logging_active;
+                extern FIL SDFile;
+                extern char SDPath[4];
+                if (sd_logging_active) {
+                    f_close(&SDFile);
+                    f_mount(NULL, SDPath, 1);
+                    sd_logging_active = 0;
+                }
+                
+                // 掛起當前 DefaultTask，火箭進入低功耗尋標模式
+                vTaskSuspend(NULL);
+            }
+            break;
+            
+        default:
+            break;
+    }
+    
+    last_vel_z = v_est; // 儲存速度歷史
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1315,11 +1480,26 @@ void StartDefaultTask(void *argument)
   /* 初始化採樣率監測器（Watch 視窗加入 g_sampling_rate 即可一次觀察全部 Hz） */
   SAMPLING_RATE_INIT();
 
+  /* === Buzzer 開機提示：兩聲漸高 (2kHz → 4kHz) === */
+  /* 聲1：2kHz，100ms */
+  htim2.Instance->ARR  = 499;
+  htim2.Instance->CCR1 = 250;
+  htim2.Instance->EGR  = TIM_EGR_UG;
+  osDelay(100);
+  htim2.Instance->CCR1 = 0;
+  osDelay(100);
+  /* 聲2：4kHz，100ms */
+  htim2.Instance->ARR  = 249;
+  htim2.Instance->CCR1 = 125;
+  htim2.Instance->EGR  = TIM_EGR_UG;
+  osDelay(100);
+  htim2.Instance->CCR1 = 0;
+
   /* === SD 卡初始化與 10 秒日誌啟動 === */
   extern FATFS SDFatFS;
   extern FIL SDFile;
   extern char SDPath[4];
-  uint8_t sd_logging_active = 0;
+  sd_logging_active = 0;
   uint32_t sd_log_start_tick = 0;
   char sd_fname[16] = {0};   // 本次開機使用的 SD 檔名 (e.g. HIL_003.CSV)
   
@@ -1387,6 +1567,24 @@ void StartDefaultTask(void *argument)
   /* === Flash Ring Buffer 初始化（SPI3，不影響 SPI1 感測器中斷） ===
    * 掃描寫入頭 + 預擦 10 個 Sector（~10×200ms = 2s），期間由函式內部餵狗 */
   FlashRing_Init();
+ 
+  /* === 空中熱啟動（Hot-Restart）恢復偵測 === */
+  FlashRingPacket_t last_pkt;
+  if (FlashRing_GetLastPacket(&last_pkt) == W25QXX_OK) {
+      if (last_pkt.fsm_state >= STATE_BOOST && last_pkt.fsm_state <= STATE_DESCENT) {
+          printf("[FSM] ⚠️ WARNING: 檢測到空中斷電重啟！正在嘗試恢復飛行狀態...\r\n");
+          printf("[FSM] 恢復前一狀態: %d, 飛行相對 Tick: %lu ms\r\n", last_pkt.fsm_state, last_pkt.tick_ms);
+          
+          EKF_calibrated = 1;     // 強制跳過 EKF 靜態校準
+          EKF_in_flight = 1;      // 強制將 EKF 設為飛行狀態
+          current_fsm_state = (FlightState_t)last_pkt.fsm_state;
+          flight_start_tick = HAL_GetTick() - last_pkt.tick_ms; // 恢復起飛基準 Tick
+      } else {
+          current_fsm_state = STATE_PAD; // 正常地面起飛
+      }
+  } else {
+      current_fsm_state = STATE_PAD; // 正常地面起飛
+  }
 
   /* FlashRing_Init 阻塞約 2s，BMP388（主迴圈讀取）在此期間無法累積計數。
    * 重置所有採樣率監測器，確保第一個 [RATE] 報告反映穩態採樣率。 */
@@ -1432,36 +1630,112 @@ void StartDefaultTask(void *argument)
         }
     }
 
-    /* === BMI088 Accel Ping-Pong 雙緩衝區批次數據提取 (1.6 kHz 中斷在背後默默採樣並填充) === */
-    if (bmi088_ok && g_bmi_acc_new_batch_ready) {
+    /* === EKF 1000 Hz Downsampling & Synchronization (Runs when new sensor batches are ready) === */
+    if (bmi088_ok && g_bmi_acc_new_batch_ready && g_bmi_gyro_new_batch_ready) {
         g_bmi_acc_new_batch_ready = 0;
-        uint8_t ready_idx = g_bmi_acc_ready_batch_idx;
-
-        // 自 16 筆最新採樣數據中，提取最後一筆最新值供即時遙測傳送與顯示
-        imu_data.accel_x_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_x_raw;
-        imu_data.accel_y_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_y_raw;
-        imu_data.accel_z_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_z_raw;
-        imu_data.ax          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].ax;
-        imu_data.ay          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].ay;
-        imu_data.az          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].az;
-
-        // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_bmi_acc_batches[ready_idx] 共 16 筆資料，即為 1.6 kHz HIL 實時存檔
-    }
-
-    /* === BMI088 Gyro Ping-Pong 雙緩衝區批次數據提取 (2.0 kHz 中斷在背後默默採樣並填充) === */
-    if (bmi088_ok && g_bmi_gyro_new_batch_ready) {
         g_bmi_gyro_new_batch_ready = 0;
-        uint8_t ready_idx = g_bmi_gyro_ready_batch_idx;
 
-        // 自 20 筆最新採樣數據中，提取最後一筆最新值供即時遙測傳送與顯示
-        imu_data.gyro_x_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_x_raw;
-        imu_data.gyro_y_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_y_raw;
-        imu_data.gyro_z_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_z_raw;
-        imu_data.gx          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gx;
-        imu_data.gy          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gy;
-        imu_data.gz          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
+        uint8_t acc_ready_idx = g_bmi_acc_ready_batch_idx;
+        uint8_t gyro_ready_idx = g_bmi_gyro_ready_batch_idx;
 
-        // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_bmi_gyro_batches[ready_idx] 共 20 筆資料，即為 2.0 kHz HIL 實時存檔
+        // Record the frame start cycle (using DWT->CYCCNT)
+        uint32_t frame_start_cycles = DWT->CYCCNT;
+
+        // Loop to generate 10 synchronized samples for the current 10ms frame
+        for (int i = 0; i < 10; i++) {
+            float t = (float)i * 1.0f; // time in ms relative to frame start (0.0 to 9.0 ms)
+
+            // 1. Accel Interpolation (16 samples over 10ms, spaced at 0.625 ms)
+            // j = floor(t / 0.625) = floor(i * 1.6)
+            float j_float = t / 0.625f;
+            int j = (int)j_float;
+            if (j < 0) j = 0;
+            if (j > 14) j = 14;
+            float fraction = j_float - (float)j;
+
+            float ax = (1.0f - fraction) * g_bmi_acc_batches[acc_ready_idx][j].ax + fraction * g_bmi_acc_batches[acc_ready_idx][j+1].ax;
+            float ay = (1.0f - fraction) * g_bmi_acc_batches[acc_ready_idx][j].ay + fraction * g_bmi_acc_batches[acc_ready_idx][j+1].ay;
+            float az = (1.0f - fraction) * g_bmi_acc_batches[acc_ready_idx][j].az + fraction * g_bmi_acc_batches[acc_ready_idx][j+1].az;
+
+            // Convert to m/s^2 by multiplying by 9.80665f (since raw readings are in g)
+            ax *= 9.80665f;
+            ay *= 9.80665f;
+            az *= 9.80665f;
+
+            // 2. Gyro Decimation (20 samples over 10ms, spaced at 0.5 ms)
+            // Time match is exact: 2 * i * 0.5 ms = i * 1.0 ms
+            int gyro_idx = 2 * i;
+            if (gyro_idx > 19) gyro_idx = 19;
+
+            float gx = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gx;
+            float gy = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gy;
+            float gz = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gz;
+
+            // Convert to rad/s by multiplying by PI / 180.0f (since raw readings are in dps)
+            gx *= (M_PI / 180.0f);
+            gy *= (M_PI / 180.0f);
+            gz *= (M_PI / 180.0f);
+
+            // 3. Assemble the sample
+            EKF_Sample_t* p_sample = &g_ekf_buffers[g_ekf_active_idx].samples[g_ekf_sample_count];
+            p_sample->ax = ax;
+            p_sample->ay = ay;
+            p_sample->az = az;
+            p_sample->gx = gx;
+            p_sample->gy = gy;
+            p_sample->gz = gz;
+
+            // Compute microsecond timestamp
+            // 1ms is 168,000 CPU cycles at 168 MHz
+            uint32_t cycles_offset = i * 168000;
+            p_sample->timestamp_us = (frame_start_cycles + cycles_offset) / (SystemCoreClock / 1000000);
+
+            // 4. Interleave Barometer readings at 200 Hz
+            // This corresponds to index 0 and index 5 of our 10 synchronized samples
+            if ((i == 0 || i == 5) && bmp388_ok) {
+                p_sample->has_baro = 1;
+                p_sample->baro_alt = baro_data.altitude;
+            } else {
+                p_sample->has_baro = 0;
+                p_sample->baro_alt = 0.0f;
+            }
+
+            g_ekf_sample_count++;
+
+            // 5. If buffer is full (100 samples), send it to the EKF playback task
+            if (g_ekf_sample_count >= EKF_BUFFER_SIZE) {
+                // Record buffer start time
+                g_ekf_buffers[g_ekf_active_idx].start_time_us = g_ekf_buffers[g_ekf_active_idx].samples[0].timestamp_us;
+
+                // Get pointer to full buffer
+                EKF_Buffer_t* p_full_buffer = &g_ekf_buffers[g_ekf_active_idx];
+
+                // Non-blocking queue send
+                osMessageQueuePut(xEKFQueue, &p_full_buffer, 0, 0);
+
+                // Switch buffer index
+                g_ekf_active_idx = !g_ekf_active_idx;
+                g_ekf_sample_count = 0;
+            }
+        }
+
+        // Also update standard imu_data structure for standard telemetry and logging
+        imu_data.accel_x_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_x_raw;
+        imu_data.accel_y_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_y_raw;
+        imu_data.accel_z_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_z_raw;
+        imu_data.ax          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ax;
+        imu_data.ay          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ay;
+        imu_data.az          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].az;
+
+        imu_data.gyro_x_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_x_raw;
+        imu_data.gyro_y_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_y_raw;
+        imu_data.gyro_z_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_z_raw;
+        imu_data.gx          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gx;
+        imu_data.gy          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gy;
+        imu_data.gz          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
+
+        // 呼叫 FSM 狀態機進行 100Hz 定時狀態轉移判定
+        FSM_Update();
     }
 
     /* === ADXL375 Ping-Pong 雙緩衝區批次數據提取 (3.2 kHz 中斷在背後默默採樣並填充) === */
@@ -1490,7 +1764,7 @@ void StartDefaultTask(void *argument)
         RATE_TICK_BMP388();   /* 統計 BMP388 實際採樣率 → g_sampling_rate.bmp388.rate_hz */
     }
 
-    /* === 每 50ms：20 Hz UART 遙測 + Flash Ring Buffer 寫入 ===
+    /* === 每 50ms：20 Hz Flash Ring Buffer 寫入 ===
      * Flash 在 SPI3，感測器在 SPI1，兩者獨立，無需停中斷
      */
     if (tick % 50 == 0) {
@@ -1511,10 +1785,13 @@ void StartDefaultTask(void *argument)
         ring_pkt.altitude_cm = (int32_t)(baro_data.altitude * 100.0f);
         ring_pkt.gps_lat     = 0;
         ring_pkt.gps_lon     = 0;
-        ring_pkt.fsm_state   = 0;
+        ring_pkt.fsm_state   = (uint8_t)current_fsm_state;
         ring_pkt.flags       = 0;
         FlashRing_WritePacket(&ring_pkt);
+    }
 
+    /* === 每 100ms：10 Hz UART 遙測輸出 (減少 CPU 阻塞開銷) === */
+    if (tick % 100 == 0) {
         /* UART 遙測輸出
          * 格式: bmi_ax(mg),bmi_ay(mg),bmi_az(mg),adxl_ax(mg),adxl_ay(mg),adxl_az(mg),
          *        temp(*100 degC),press(Pa),alt(cm)
@@ -1528,7 +1805,8 @@ void StartDefaultTask(void *argument)
                (int)(highg_data.az * 1000.0f),
                (int)(baro_data.temperature * 100.0f),
                (int)(baro_data.pressure),
-               (int)(baro_data.altitude * 100.0f));    }
+               (int)(baro_data.altitude * 100.0f));
+    }
 
     /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
     if (tick % 500 == 0) {
