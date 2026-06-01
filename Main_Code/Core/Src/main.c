@@ -112,6 +112,9 @@ SAMPLING_RATE_DECL();   /* 展開為: SamplingRateAll_t g_sampling_rate */
 EKF_Buffer_t g_ekf_buffers[2];
 volatile uint8_t g_ekf_active_idx = 0;
 volatile uint8_t g_ekf_sample_count = 0;
+/* EKF queue put 失敗計數：消費端 (EKF_Task) 落後造成 buffer 來不及入列時遞增。
+ * 由 [RATE] 行輸出供觀測；若長期 >0 才需考慮擴大 buffer pool + queue 深度 (Item I)。 */
+volatile uint32_t g_ekf_queue_drops = 0;
 
 /* --- TIM3 (3.2 kHz) ADXL375 Ping-Pong 雙緩衝區宣告 --- */
 #define ADXL_BATCH_SIZE 32
@@ -1473,9 +1476,12 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN 5 */
   uint32_t tick = 0;
 
-  /* 開機第一件事：完整讀取 W25Q128 三分區並格式化輸出到 USART2
-   * 用於確認上一次飛行數據是否完整存入，並驗證 Flash 晶片狀態 */
-  Flash_DumpAll(&hspi3);
+  /* 開機按住 USER_BT1 才完整 dump W25Q128 三分區到 USART2（讀取上一次飛行數據、驗證 Flash 狀態）。
+   * USER_BT1 為上拉輸入 → 按下讀到 LOW (GPIO_PIN_RESET)。
+   * 平時開機跳過 dump，可省下整顆 Flash 輸出 (~3–5 秒) 的初始化時間 (Item N)。 */
+  if (HAL_GPIO_ReadPin(USER_BT1_GPIO_Port, USER_BT1_Pin) == GPIO_PIN_RESET) {
+      Flash_DumpAll(&hspi3);
+  }
 
   /* 初始化採樣率監測器（Watch 視窗加入 g_sampling_rate 即可一次觀察全部 Hz） */
   SAMPLING_RATE_INIT();
@@ -1710,8 +1716,10 @@ void StartDefaultTask(void *argument)
                 // Get pointer to full buffer
                 EKF_Buffer_t* p_full_buffer = &g_ekf_buffers[g_ekf_active_idx];
 
-                // Non-blocking queue send
-                osMessageQueuePut(xEKFQueue, &p_full_buffer, 0, 0);
+                // Non-blocking queue send；put 失敗 (queue 滿) 代表 EKF_Task 消費不及，計數供觀測
+                if (osMessageQueuePut(xEKFQueue, &p_full_buffer, 0, 0) != osOK) {
+                    g_ekf_queue_drops++;
+                }
 
                 // Switch buffer index
                 g_ekf_active_idx = !g_ekf_active_idx;
@@ -1816,12 +1824,13 @@ void StartDefaultTask(void *argument)
 #ifdef RATE_MONITOR_ENABLE
     /* 每 1000ms 輸出一次各感測器實際採樣率，便於自動化測試腳本讀取與斷言分析 */
     if (tick % 1000 == 0) {
-        printf("[RATE] BMI088_A:%uHz, BMI088_G:%uHz, ADXL375:%uHz, BMP388:%uHz, SD_DET:%d\r\n",
+        printf("[RATE] BMI088_A:%uHz, BMI088_G:%uHz, ADXL375:%uHz, BMP388:%uHz, SD_DET:%d, EKF_DROP:%lu\r\n",
                (unsigned int)g_sampling_rate.bmi088_acc.rate_hz,
                (unsigned int)g_sampling_rate.bmi088_gyro.rate_hz,
                (unsigned int)g_sampling_rate.adxl375.rate_hz,
                (unsigned int)g_sampling_rate.bmp388.rate_hz,
-               (int)HAL_GPIO_ReadPin(SDIO_DET_GPIO_Port, SDIO_DET_Pin));
+               (int)HAL_GPIO_ReadPin(SDIO_DET_GPIO_Port, SDIO_DET_Pin),
+               (unsigned long)g_ekf_queue_drops);
         printf("[FLASH_RING] PKT_TOTAL:%lu ADDR:0x%06lX\r\n",
                FlashRing_GetPacketCount(), FlashRing_GetWriteAddr());
     }
