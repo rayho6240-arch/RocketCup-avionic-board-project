@@ -262,6 +262,29 @@ int main(void)
   }
   if (BMP388_Init(&hspi1, &baro_data) == HAL_OK) {
       bmp388_ok = 1;
+      /* 以發射台環境溫度鎖定高度換算參考溫度 T0 (Item H)。
+       * 取 16 筆讀數平均濾除單筆雜訊；必須在 EKF 校準（RTOS 啟動後）之前完成，
+       * 使 launchpad 參考與飛行讀數共用同一 T0，相對高度於發射台恆為 0 且全程連續。
+       * BMP388 與 ADXL375 共用 SPI1，讀取時暫關 TIM3 中斷以避免匯流排競爭（同主迴圈做法）。 */
+      float t0_sum = 0.0f;
+      int   t0_n   = 0;
+      for (int i = 0; i < 16; i++) {
+          __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+          HAL_StatusTypeDef t0_res = BMP388_ReadData(&hspi1, &baro_data);
+          __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
+          if (t0_res == HAL_OK) {
+              t0_sum += baro_data.temperature;
+              t0_n++;
+          }
+          HAL_Delay(5);   /* BMP388 200Hz ODR → 5ms 取得新樣本 */
+      }
+      if (t0_n > 0) {
+          float t0_avg = t0_sum / (float)t0_n;
+          BMP388_SetReferenceTemp(t0_avg);
+          printf("[BMP388] 高度換算參考溫度 T0 鎖定為 %d.%02d °C\r\n",
+                 (int)t0_avg,
+                 (int)(fabsf(t0_avg - (int)t0_avg) * 100.0f));
+      }
   }
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
