@@ -96,6 +96,8 @@ FlightState_t current_fsm_state = STATE_INIT;
 uint32_t flight_start_tick = 0;
 float last_vel_z = 0.0f;
 uint8_t sd_logging_active = 0;
+/* 落地時刻 tick（0 = 尚未落地）。SD 全程記錄據此由 100Hz 降為 10Hz，並於逾時後自動關檔 (Item E)。 */
+volatile uint32_t g_touchdown_tick = 0;
 
 BMI088_Data_t imu_data;
 ADXL375_Data_t highg_data;
@@ -1432,27 +1434,18 @@ static void FSM_Update(void)
             break;
             
         case STATE_LANDED:
-            // 落地判定：下墜速度趨近零，且高度小於 20m
-            if (fabsf(v_est) < 0.3f && h_est < 20.0f) {
-                printf("[FSM] 🏁 TOUCHDOWN SUCCESSFUL! Flight telemetry logging safe.\r\n");
-                
-                // 開啟板載尋標蜂鳴器（持續嗶嗶聲）
+            // 落地判定：下墜速度趨近零，且高度小於 20m（僅觸發一次）
+            if (g_touchdown_tick == 0 && fabsf(v_est) < 0.3f && h_est < 20.0f) {
+                g_touchdown_tick = now;   // 記錄落地時刻：SD 記錄降為 10Hz，逾時或按 USER_BT1 後關檔
+                printf("[FSM] 🏁 TOUCHDOWN! 持續記錄中（降頻 10Hz）。按 USER_BT1 或逾時後自動關檔。\r\n");
+
+                // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
                 htim2.Instance->ARR  = 999;
                 htim2.Instance->CCR1 = 500;
                 htim2.Instance->EGR  = TIM_EGR_UG;
-                
-                // 安全關閉 SD 卡文件，物理卸載
-                extern uint8_t sd_logging_active;
-                extern FIL SDFile;
-                extern char SDPath[4];
-                if (sd_logging_active) {
-                    f_close(&SDFile);
-                    f_mount(NULL, SDPath, 1);
-                    sd_logging_active = 0;
-                }
-                
-                // 掛起當前 DefaultTask，火箭進入低功耗尋標模式
-                vTaskSuspend(NULL);
+
+                // 注意：不再立即關閉 SD、也不再 vTaskSuspend。改由主迴圈 SD 記錄區塊持續記錄，
+                // 待停止條件達成時才安全關檔，使遙測 / Flash ring / 尋標蜂鳴器在落地後仍持續運作 (Item E)。
             }
             break;
             
@@ -1551,8 +1544,8 @@ void StartDefaultTask(void *argument)
           if (fopen_res == FR_OK) {
               sd_logging_active = 1;
               sd_log_start_tick = HAL_GetTick();
-              printf("[SD] [SUCCESS] %s 建立成功！開始進行 10 秒高頻日誌寫入...\r\n", sd_fname);
-              char header[] = "tick_ms,bmi_ax,bmi_ay,bmi_az,adxl_ax,adxl_ay,adxl_az,temp,press,alt\r\n";
+              printf("[SD] [SUCCESS] %s 建立成功！開始全程飛行記錄（飛行 100Hz / 落地後 10Hz）...\r\n", sd_fname);
+              char header[] = "tick_ms,bmi_ax,bmi_ay,bmi_az,adxl_ax,adxl_ay,adxl_az,temp,press,alt,fsm,ekf_alt_cm,ekf_vel_cms\r\n";
               UINT bw;
               f_write(&SDFile, header, sizeof(header) - 1, &bw);
           } else {
@@ -1562,7 +1555,7 @@ void StartDefaultTask(void *argument)
           printf("[SD] [ERROR] 掛載 SD 卡文件系統失敗！\r\n");
       }
   } else {
-      printf("[SD] [WARNING] 未檢測到實體 SD 卡插入（SDIO_DET 為高電平），跳過 10 秒日誌寫入。\r\n");
+      printf("[SD] [WARNING] 未檢測到實體 SD 卡插入（SDIO_DET 為高電平），跳過 SD 飛行記錄。\r\n");
   }
 
   // SD 卡掛載與開檔流程結束後，重新恢復高頻中斷
@@ -1603,36 +1596,57 @@ void StartDefaultTask(void *argument)
     /* --- 餵狗 (Feed the independent watchdog) --- */
     HAL_IWDG_Refresh(&hiwdg);
 
-    /* === 10 秒 SD 卡數據實時寫入 === */
+    /* === SD 卡全程飛行記錄（FSM 驅動，取代原 10 秒上限）===
+     * 升空至落地前以 100Hz 記錄；落地後 (g_touchdown_tick != 0) 降為 10Hz；
+     * 停止條件：按下 USER_BT1，或落地後超過 SD_LANDED_LOG_TIMEOUT_MS；
+     * 每秒 f_sync 一次，限制斷電造成的資料遺失 (Item E)。 */
     if (sd_logging_active) {
-        uint32_t current_elapsed = HAL_GetTick() - sd_log_start_tick;
-        if (current_elapsed < 10000U) {
-            if (tick % 10 == 0) { // 100 Hz 採樣寫入
-                char csv_buf[128];
-                int len = snprintf(csv_buf, sizeof(csv_buf), "%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
-                                   (unsigned int)current_elapsed,
-                                   (int)(imu_data.ax * 1000.0f),
-                                   (int)(imu_data.ay * 1000.0f),
-                                   (int)(imu_data.az * 1000.0f),
-                                   (int)(highg_data.ax * 1000.0f),
-                                   (int)(highg_data.ay * 1000.0f),
-                                   (int)(highg_data.az * 1000.0f),
-                                   (int)(baro_data.temperature * 100.0f),
-                                   (int)(baro_data.pressure),
-                                   (int)(baro_data.altitude * 100.0f));
-                UINT bytes_written;
-                FRESULT res = f_write(&SDFile, csv_buf, len, &bytes_written);
-                if (res != FR_OK) {
-                    printf("[SD] [ERROR] 寫入數據失敗！res=%d\r\n", res);
-                    sd_logging_active = 0;
-                }
-            }
-        } else {
-            // 達到 10 秒，關閉並儲存檔案
+        uint8_t  landed   = (g_touchdown_tick != 0);
+        uint32_t rate_div = landed ? 100U : 10U;     // 落地 10Hz / 飛行 100Hz
+
+        uint8_t stop_request = 0;
+        if (HAL_GPIO_ReadPin(USER_BT1_GPIO_Port, USER_BT1_Pin) == GPIO_PIN_RESET) {
+            stop_request = 1;
+            printf("[SD] USER_BT1 按下，停止記錄並安全關檔。\r\n");
+        } else if (landed && (HAL_GetTick() - g_touchdown_tick) > SD_LANDED_LOG_TIMEOUT_MS) {
+            stop_request = 1;
+            printf("[SD] 落地後記錄逾時，停止記錄並安全關檔。\r\n");
+        }
+
+        if (stop_request) {
             f_close(&SDFile);
-            f_mount(NULL, SDPath, 1); // 卸載檔案系統
+            f_mount(NULL, SDPath, 1);
             sd_logging_active = 0;
-            printf("[SD] [SUCCESS] 10 秒數據寫入結束！檔案已安全關閉並儲存 (%s)。\r\n", sd_fname);
+            printf("[SD] [SUCCESS] 檔案已安全關閉並儲存 (%s)。\r\n", sd_fname);
+        } else if (tick % rate_div == 0) {
+            EKF_State_t sd_ekf = EKF_GetState();
+            uint32_t elapsed = HAL_GetTick() - sd_log_start_tick;
+            char csv_buf[160];
+            int len = snprintf(csv_buf, sizeof(csv_buf),
+                               "%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%ld,%ld\r\n",
+                               (unsigned long)elapsed,
+                               (int)(imu_data.ax * 1000.0f),
+                               (int)(imu_data.ay * 1000.0f),
+                               (int)(imu_data.az * 1000.0f),
+                               (int)(highg_data.ax * 1000.0f),
+                               (int)(highg_data.ay * 1000.0f),
+                               (int)(highg_data.az * 1000.0f),
+                               (int)(baro_data.temperature * 100.0f),
+                               (int)(baro_data.pressure),
+                               (int)(baro_data.altitude * 100.0f),
+                               (int)current_fsm_state,
+                               (long)(sd_ekf.pos_z * 100.0f),
+                               (long)(sd_ekf.vel_z * 100.0f));
+            UINT bytes_written;
+            FRESULT res = f_write(&SDFile, csv_buf, len, &bytes_written);
+            if (res != FR_OK) {
+                printf("[SD] [ERROR] 寫入數據失敗！res=%d，停止記錄並關檔。\r\n", res);
+                f_close(&SDFile);
+                f_mount(NULL, SDPath, 1);
+                sd_logging_active = 0;
+            } else if (tick % 1000 == 0) {
+                f_sync(&SDFile);   // 每秒 flush FAT/目錄，限制斷電資料遺失
+            }
         }
     }
 

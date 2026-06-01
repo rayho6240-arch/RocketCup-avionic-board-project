@@ -141,6 +141,7 @@ void Error_Handler(void);
 #define TARGET_MAIN_ALTITUDE     150.0f  // 目標主傘完全張開高度 (m)
 #define MAIN_DEPLOY_DELAY_S      3.5f    // 主傘機構部署延遲時間 (s)
 #define DROGUE_LEAD_TIME_S       4.0f    // 副傘頂點預估提前開傘時間 (s)
+#define SD_LANDED_LOG_TIMEOUT_MS 1800000UL  // 落地後 SD 持續記錄上限 (30 分鐘)，逾時自動關檔
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
