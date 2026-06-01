@@ -30,6 +30,7 @@
 #include "w25q128.h"
 #include "rate_monitor.h"  /* 採樣率監測模組，要停用請在 rate_monitor.h 註解 #define RATE_MONITOR_ENABLE */
 #include "ekf.h"
+#include "gps.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -286,6 +287,11 @@ int main(void)
                  (int)(fabsf(t0_avg - (int)t0_avg) * 100.0f));
       }
   }
+
+  /* GPS 驅動啟動 (USART6, NMEA-0183, 循環 DMA + IDLE 接收)。
+   * NEO-M9N 實體掛載於 USART6（PC6/PC7）；解析於 task context（主迴圈 GPS_Update()）進行，
+   * ISR/DMA 事件回呼僅組句設旗標。 */
+  GPS_Init(&huart6);
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
   Flash_Test();
@@ -1799,6 +1805,11 @@ void StartDefaultTask(void *argument)
         // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_adxl_batches[ready_idx] 共 32 筆資料，即為 3.2 kHz HIL 實時存檔
     }
 
+    /* === GPS（USART6 NMEA）：每迴圈嘗試消化一整句 ===
+     * 無整句就緒時僅檢查旗標，極輕量；循環 DMA + IDLE 事件已於背景組句。
+     * 每迴圈呼叫可即時排空單句緩衝，避免連續輸出時被新句覆蓋。 */
+    GPS_Update();
+
     /* === BMP388 @ 200 Hz (每 5ms，Normal Mode 最高 ODR=200Hz，1x OS 轉換時間 4.94ms < 5ms 週期) === */
     if (tick % 5 == 0 && bmp388_ok) {
         // 在任務讀取 BMP388 (SPI1) 期間，暫時關閉 TIM3 中斷，防止高優先權中斷搶佔 SPI1 匯流排
@@ -1828,8 +1839,15 @@ void StartDefaultTask(void *argument)
         ring_pkt.temperature = (int32_t)(baro_data.temperature * 100.0f);
         ring_pkt.pressure    = (uint32_t)(baro_data.pressure);
         ring_pkt.altitude_cm = (int32_t)(baro_data.altitude * 100.0f);
-        ring_pkt.gps_lat     = 0;
-        ring_pkt.gps_lon     = 0;
+        /* GPS 經緯度（×1e6 deg）：僅在有有效定位時填入，否則維持 0 */
+        const GPS_Data_t *gps_pkt = GPS_GetData();
+        if (gps_pkt->fix_valid) {
+            ring_pkt.gps_lat = gps_pkt->lat_1e6;
+            ring_pkt.gps_lon = gps_pkt->lon_1e6;
+        } else {
+            ring_pkt.gps_lat = 0;
+            ring_pkt.gps_lon = 0;
+        }
         ring_pkt.fsm_state   = (uint8_t)current_fsm_state;
         ring_pkt.flags       = 0;
         FlashRing_WritePacket(&ring_pkt);
@@ -1851,6 +1869,27 @@ void StartDefaultTask(void *argument)
                (int)(baro_data.temperature * 100.0f),
                (int)(baro_data.pressure),
                (int)(baro_data.altitude * 100.0f));
+    }
+
+    /* === 每 1000ms：1 Hz GPS 狀態遙測（NMEA 標準輸出多為 1Hz）===
+     * 經緯度以正負號 + 絕對值列印，避免「整數部為 0 但實際為負」時遺失負號。 */
+    if (tick % 1000 == 0) {
+        const GPS_Data_t *g = GPS_GetData();
+        char     lat_sign = (g->lat_1e6 < 0) ? '-' : '+';
+        char     lon_sign = (g->lon_1e6 < 0) ? '-' : '+';
+        uint32_t lat_abs  = (g->lat_1e6 < 0) ? (uint32_t)(-g->lat_1e6) : (uint32_t)g->lat_1e6;
+        uint32_t lon_abs  = (g->lon_1e6 < 0) ? (uint32_t)(-g->lon_1e6) : (uint32_t)g->lon_1e6;
+        printf("[GPS] fix:%d q:%d sat:%d %c%lu.%06lu,%c%lu.%06lu alt:%dm spd:%dcm/s stale:%d ok:%lu err:%lu\r\n",
+               (int)g->fix_valid,
+               (int)g->fix_quality,
+               (int)g->satellites,
+               lat_sign, (unsigned long)(lat_abs / 1000000U), (unsigned long)(lat_abs % 1000000U),
+               lon_sign, (unsigned long)(lon_abs / 1000000U), (unsigned long)(lon_abs % 1000000U),
+               (int)g->altitude_m,
+               (int)(g->speed_mps * 100.0f),
+               (int)GPS_IsStale(2000),
+               (unsigned long)g->sentences_ok,
+               (unsigned long)g->sentences_err);
     }
 
     /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
