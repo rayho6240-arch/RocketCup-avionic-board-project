@@ -259,7 +259,7 @@ int main(void)
       bmp388_ok = 1;
   }
 
-  /* W25Qxx SPI Flash 啟動自檢 (SPI1, CS=PA15) */
+  /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
   Flash_Test();
 
   /* Buzzer：啟動 TIM2 CH1 PWM，初始靜音 (CCR1=0) */
