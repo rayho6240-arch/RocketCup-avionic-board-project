@@ -1514,6 +1514,11 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN 5 */
   uint32_t tick = 0;
 
+  /* === LED 開機自檢：全亮 2 秒確認三顆 LED 正常，之後全滅交由主迴圈接管 === */
+  HAL_GPIO_WritePin(GPIOE, LED_SYS_Pin | GPIO_PIN_3 | LED_STAT2_Pin, GPIO_PIN_SET);
+  osDelay(2000);
+  HAL_GPIO_WritePin(GPIOE, LED_SYS_Pin | GPIO_PIN_3 | LED_STAT2_Pin, GPIO_PIN_RESET);
+
   /* 開機按住 USER_BT1 才完整 dump W25Q128 三分區到 USART2（讀取上一次飛行數據、驗證 Flash 狀態）。
    * USER_BT1 為上拉輸入 → 按下讀到 LOW (GPIO_PIN_RESET)。
    * 平時開機跳過 dump，可省下整顆 Flash 輸出 (~3–5 秒) 的初始化時間 (Item N)。 */
