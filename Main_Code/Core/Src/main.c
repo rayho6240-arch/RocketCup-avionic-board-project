@@ -1998,6 +1998,25 @@ void StartDefaultTask(void *argument)
         HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
     }
 
+    /* === 感測器狀態 LED（每 100ms 更新，與 mag 讀取週期對齊，避免 1kHz 高頻寫 GPIO）===
+     * STAT1 (PE3)：GPS 有有效定位 (fix_valid=1) 則常亮，否則熄滅
+     * STAT2 (PE4)：磁力計初始化成功 (mag_ok=1) 且最近一次讀取 OK (reads_ok>0) 則常亮 */
+    if (tick % 100 == 0) {
+        /* GPS STAT1 */
+        const GPS_Data_t *led_gps = GPS_GetData();
+        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3,
+                          led_gps->fix_valid ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+        /* Mag STAT2 */
+        uint8_t mag_led = 0;
+        if (mag_ok) {
+            const MMC5983_Data_t *led_mag = MMC5983_GetData();
+            mag_led = (led_mag->ok && led_mag->reads_ok > 0) ? 1 : 0;
+        }
+        HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin,
+                          mag_led ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    }
+
 #ifdef RATE_MONITOR_ENABLE
     /* 每 1000ms 輸出一次各感測器實際採樣率，便於自動化測試腳本讀取與斷言分析 */
     if (tick % 1000 == 0) {
