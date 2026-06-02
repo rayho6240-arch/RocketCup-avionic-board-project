@@ -31,6 +31,7 @@
 #include "rate_monitor.h"  /* 採樣率監測模組，要停用請在 rate_monitor.h 註解 #define RATE_MONITOR_ENABLE */
 #include "ekf.h"
 #include "gps.h"
+#include "mmc5983.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -107,6 +108,7 @@ BMP388_Data_t baro_data;
 uint8_t bmi088_ok = 0;
 uint8_t adxl375_ok = 0;
 uint8_t bmp388_ok = 0;
+uint8_t mag_ok = 0;       /* MMC5983MA 地磁計（I2C1）初始化狀態 */
 
 /* 採樣率監測器：在 IDE Watch / Live Expressions 加入《g_sampling_rate》即可一次觀察所有感測器 */
 SAMPLING_RATE_DECL();   /* 展開為: SamplingRateAll_t g_sampling_rate */
@@ -292,6 +294,20 @@ int main(void)
    * NEO-M9N 實體掛載於 USART6（PC6/PC7）；解析於 task context（主迴圈 GPS_Update()）進行，
    * ISR/DMA 事件回呼僅組句設旗標。 */
   GPS_Init(&huart6);
+
+  /* MMC5983MA 三軸地磁計啟動 (I2C1, SCL=PB7/SDA=PB8, 位址 0x30)。
+   * 初始化含 Product ID 驗證、軟體重置、400Hz 頻寬與一次 SET/RESET 橋偏校準。
+   * 失敗（晶片未上線）僅記錄旗標，不阻擋系統啟動。 */
+  if (MMC5983_Init(&hi2c1) == HAL_OK) {
+      mag_ok = 1;
+      printf("[MAG] MMC5983MA online. offset[X,Y,Z]=%ld,%ld,%ld\r\n",
+             (long)MMC5983_GetData()->offset[0],
+             (long)MMC5983_GetData()->offset[1],
+             (long)MMC5983_GetData()->offset[2]);
+  } else {
+      mag_ok = 0;
+      printf("[MAG] MMC5983MA NOT detected (I2C1).\r\n");
+  }
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
   Flash_Test();
@@ -1810,6 +1826,16 @@ void StartDefaultTask(void *argument)
      * 每迴圈呼叫可即時排空單句緩衝，避免連續輸出時被新句覆蓋。 */
     GPS_Update();
 
+    /* === MMC5983MA 地磁計 @ 10 Hz (每 100ms 一次 one-shot 量測，~3ms 阻塞) ===
+     * 地磁航向僅在發射台靜置階段用於 EKF yaw 修正，10Hz 已足夠；量測在 task context。 */
+    if (mag_ok && (tick % 100 == 0)) {
+        MMC5983_Read();
+    }
+    /* 每 10 秒重做一次 SET/RESET 橋偏校準以補溫漂；飛行中不做（地磁融合僅限發射台）。 */
+    if (mag_ok && !EKF_in_flight && (tick % 10000 == 0) && (tick > 0)) {
+        MMC5983_Recalibrate();
+    }
+
     /* === BMP388 @ 200 Hz (每 5ms，Normal Mode 最高 ODR=200Hz，1x OS 轉換時間 4.94ms < 5ms 週期) === */
     if (tick % 5 == 0 && bmp388_ok) {
         // 在任務讀取 BMP388 (SPI1) 期間，暫時關閉 TIM3 中斷，防止高優先權中斷搶佔 SPI1 匯流排
@@ -1890,6 +1916,18 @@ void StartDefaultTask(void *argument)
                (int)GPS_IsStale(2000),
                (unsigned long)g->sentences_ok,
                (unsigned long)g->sentences_err);
+
+        /* 地磁計 1 Hz 診斷：磁場 (mGauss) 與粗略水平航向 (deg)。 */
+        if (mag_ok) {
+            const MMC5983_Data_t *m = MMC5983_GetData();
+            printf("[MAG] B[mG]:%d,%d,%d hdg:%d ok:%lu err:%lu\r\n",
+                   (int)(m->gauss[0] * 1000.0f),
+                   (int)(m->gauss[1] * 1000.0f),
+                   (int)(m->gauss[2] * 1000.0f),
+                   (int)m->heading_deg,
+                   (unsigned long)m->reads_ok,
+                   (unsigned long)m->reads_err);
+        }
     }
 
     /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
