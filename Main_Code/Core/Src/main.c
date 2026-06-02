@@ -2007,23 +2007,30 @@ void StartDefaultTask(void *argument)
         HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
     }
 
-    /* === 感測器狀態 LED（每 100ms 更新，與 mag 讀取週期對齊，避免 1kHz 高頻寫 GPIO）===
-     * STAT1 (PE3)：GPS 有有效定位 (fix_valid=1) 則常亮，否則熄滅
-     * STAT2 (PE4)：磁力計初始化成功 (mag_ok=1) 且最近一次讀取 OK (reads_ok>0) 則常亮 */
+    /* === 感測器狀態 LED（每 100ms 更新）===
+     * STAT1 (PE3)：GPS 模組有在送 NMEA 訊號 (sentences_ok>0) 常亮；
+     *              有有效定位 (fix_valid=1) 時進一步 2Hz 快閃（亮=有收星但無 fix，
+     *              不閃常亮=有 fix，熄滅=沒有 NMEA 訊號）。
+     *              用途：室內可確認 GPS 模組通訊正常，戶外可看到 fix 狀態。
+     * STAT2 (PE4)：磁力計 I2C 初始化成功 (mag_ok=1) 則常亮，否則熄滅。 */
     if (tick % 100 == 0) {
-        /* GPS STAT1 */
+        /* GPS STAT1：有 NMEA 訊號才亮；有 fix 常亮，無 fix 每 500ms 閃一次 */
         const GPS_Data_t *led_gps = GPS_GetData();
-        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3,
-                          led_gps->fix_valid ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
-        /* Mag STAT2 */
-        uint8_t mag_led = 0;
-        if (mag_ok) {
-            const MMC5983_Data_t *led_mag = MMC5983_GetData();
-            mag_led = (led_mag->ok && led_mag->reads_ok > 0) ? 1 : 0;
+        if (led_gps->sentences_ok > 0) {
+            if (led_gps->fix_valid) {
+                HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   /* 常亮 = 有 fix */
+            } else {
+                /* 2Hz 閃爍 = 有 NMEA 但無 fix：以 tick/500 的奇偶決定亮滅 */
+                GPIO_PinState blink = ((tick / 500) % 2 == 0) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+                HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, blink);
+            }
+        } else {
+            HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);     /* 熄滅 = 無訊號 */
         }
+
+        /* Mag STAT2：初始化成功即常亮（不需要讀取到資料才亮） */
         HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin,
-                          mag_led ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                          mag_ok ? GPIO_PIN_SET : GPIO_PIN_RESET);
     }
 
 #ifdef RATE_MONITOR_ENABLE
