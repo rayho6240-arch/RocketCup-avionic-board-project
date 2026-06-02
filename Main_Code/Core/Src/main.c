@@ -1703,6 +1703,13 @@ void StartDefaultTask(void *argument)
         uint8_t acc_ready_idx = g_bmi_acc_ready_batch_idx;
         uint8_t gyro_ready_idx = g_bmi_gyro_ready_batch_idx;
 
+        /* 改善項目 A：高G感測器切換前置快照。
+         * 在進入 EKF 樣本迴圈前鎖定 ADXL batch idx，避免迴圈執行期間 TIM3 ISR 完成新批
+         * 次並更新 g_adxl_ready_batch_idx，導致同一個 10ms 窗格內讀到混合批次的資料。
+         * 注意：不在此清除 g_adxl_new_batch_ready，保留給稍後的 highg_data 更新（~1808）。 */
+        uint8_t adxl_hiG_avail = adxl375_ok && (g_adxl_new_batch_ready != 0);
+        uint8_t adxl_hiG_bidx  = g_adxl_ready_batch_idx;
+
         // Record the frame start cycle (using DWT->CYCCNT)
         uint32_t frame_start_cycles = DWT->CYCCNT;
 
@@ -1726,6 +1733,29 @@ void StartDefaultTask(void *argument)
             ax *= 9.80665f;
             ay *= 9.80665f;
             az *= 9.80665f;
+
+            /* 改善項目 A：高G感測器切換 —— |a_bmi| > 20g（196 m/s²）時以 ADXL375（±200g）替換
+             * BMI088 最大量程 ±24g，超出後飽和；ADXL375 量程 ±200g，解析度 0.049g/LSB。
+             * 本迴圈以 ADXL batch（3200Hz，32筆/10ms）中對應時刻的樣本索引取代 BMI，
+             * i∈[0,9]→adxl_i=i×3∈[0,27]，近似 1ms 間距（精確 3200Hz/1000Hz=3.2）。
+             * 單位：ADXL 輸出為 g（×0.049），乘 9.80665 → m/s²，與 BMI 路徑一致。
+             * 偏差校正：EKF 校準期（發射台靜置 3s）以 BMI 資料計算 accel_bias；由於
+             * ADXL Z 與 BMI Z 方向一致（均感測重力 ≈ 9.81 m/s²），BMI bias 對 ADXL Z 軸
+             * 同樣適用（靜態時 accel_bias[2] ≈ 0）；ADXL X/Y 靜態偏置通常 < 50mg，
+             * 在 20g+ 環境可忽略。
+             * ⚠️ PCB X/Y 軸向對齊：BMI 與 ADXL 因板卡佈局 X/Y 反向可能不一致，需上板
+             * bench 驗證（旋轉火箭艙，確認 ADXL ax/ay 符號與 BMI 一致）；若方向相反，
+             * 於下方 ax/ay 各加負號（並加上 #define 以便開關）。 */
+            if (adxl_hiG_avail) {
+                float a_mag_sq = ax*ax + ay*ay + az*az;
+                if (a_mag_sq > (20.0f * 9.80665f) * (20.0f * 9.80665f)) {  /* > 20g, 避免 sqrt */
+                    int adxl_i = i * 3;
+                    if (adxl_i > ADXL_BATCH_SIZE - 1) adxl_i = ADXL_BATCH_SIZE - 1;
+                    ax = g_adxl_batches[adxl_hiG_bidx][adxl_i].ax * 9.80665f;
+                    ay = g_adxl_batches[adxl_hiG_bidx][adxl_i].ay * 9.80665f;
+                    az = g_adxl_batches[adxl_hiG_bidx][adxl_i].az * 9.80665f;
+                }
+            }
 
             // 2. Gyro Decimation (20 samples over 10ms, spaced at 0.5 ms)
             // Time match is exact: 2 * i * 0.5 ms = i * 1.0 ms
