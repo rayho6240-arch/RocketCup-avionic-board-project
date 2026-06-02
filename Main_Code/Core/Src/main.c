@@ -1514,9 +1514,13 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN 5 */
   uint32_t tick = 0;
 
-  /* === LED 開機自檢：全亮 2 秒確認三顆 LED 正常，之後全滅交由主迴圈接管 === */
+  /* === LED 開機自檢：全亮 2 秒確認三顆 LED 正常，之後全滅交由主迴圈接管 ===
+   * 分 4 × 500ms 餵狗，避免 IWDG 2.05s timeout 在此期間觸發 reset。 */
   HAL_GPIO_WritePin(GPIOE, LED_SYS_Pin | GPIO_PIN_3 | LED_STAT2_Pin, GPIO_PIN_SET);
-  osDelay(2000);
+  for (int _li = 0; _li < 4; _li++) {
+      osDelay(500);
+      HAL_IWDG_Refresh(&hiwdg);
+  }
   HAL_GPIO_WritePin(GPIOE, LED_SYS_Pin | GPIO_PIN_3 | LED_STAT2_Pin, GPIO_PIN_RESET);
 
   /* 開機按住 USER_BT1 才完整 dump W25Q128 三分區到 USART2（讀取上一次飛行數據、驗證 Flash 狀態）。
