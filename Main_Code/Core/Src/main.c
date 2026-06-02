@@ -1842,7 +1842,12 @@ void StartDefaultTask(void *argument)
     /* === MMC5983MA 地磁計 @ 10 Hz (每 100ms 一次 one-shot 量測，~3ms 阻塞) ===
      * 地磁航向僅在發射台靜置階段用於 EKF yaw 修正，10Hz 已足夠；量測在 task context。 */
     if (mag_ok && (tick % 100 == 0)) {
-        MMC5983_Read();
+        if (MMC5983_Read() == HAL_OK) {
+            /* 提交 body-frame 磁場向量供 EKF 在發射台階段做 yaw 修正。
+             * 軸向假設與 IMU body frame 對齊；若 bench 測試航向反向，於此處對相應軸取負。 */
+            const MMC5983_Data_t *mg = MMC5983_GetData();
+            EKF_SubmitMag(mg->gauss[0], mg->gauss[1], mg->gauss[2]);
+        }
     }
     /* 每 10 秒重做一次 SET/RESET 橋偏校準以補溫漂；飛行中不做（地磁融合僅限發射台）。 */
     if (mag_ok && !EKF_in_flight && (tick % 10000 == 0) && (tick > 0)) {

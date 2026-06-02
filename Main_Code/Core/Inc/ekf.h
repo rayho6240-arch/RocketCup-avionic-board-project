@@ -62,6 +62,15 @@ void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float 
  * 多次提交僅保留最新一筆；衛星數越少量測噪聲 R 越大（越不信任）。 */
 void EKF_SubmitGPS(int32_t lat_1e6, int32_t lon_1e6, uint8_t satellites);
 
+/* 地磁計航向 (yaw) 注入（由 defaultTask 呼叫，~10Hz）。
+ * mx,my,mz 為 IMU body frame 下的磁場向量（任意單位，僅取方向）。
+ * 僅於發射台階段（校準後、未升空）做傾斜補償後的 yaw 互補修正，
+ * 用以鎖定絕對航向並抑制重力回授無法觀測的陀螺 yaw 漂移；
+ * 升空後不使用（與既有設計一致：飛行中姿態為純陀螺遞推）。
+ * 注意：mx,my,mz 軸向須與 IMU body frame 對齊；若 bench 測試發現航向往反向
+ * 收斂，於呼叫端對相應軸取負號即可。 */
+void EKF_SubmitMag(float mx, float my, float mz);
+
 EKF_State_t EKF_GetState(void);
 
 void EKF_Task(void *argument);

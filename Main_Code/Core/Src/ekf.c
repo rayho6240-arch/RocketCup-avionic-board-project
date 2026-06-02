@@ -53,6 +53,13 @@ static float    EKF_gps_meas_E CCMRAM = 0.0f;           // pending measured East
 static float    EKF_gps_meas_N CCMRAM = 0.0f;           // pending measured North (m, rel. launchpad)
 static float    EKF_gps_R CCMRAM = 25.0f;               // pending measurement variance (m^2)
 
+// --- Magnetometer heading (yaw) fusion ---
+// Written by defaultTask via EKF_SubmitMag(), consumed once per buffer in EKF_Task.
+static volatile uint8_t EKF_mag_pending CCMRAM = 0;     // 1 = a mag vector awaits application
+static float    EKF_mag_x CCMRAM = 0.0f;                // body-frame magnetic field X
+static float    EKF_mag_y CCMRAM = 0.0f;                // body-frame magnetic field Y
+static float    EKF_mag_z CCMRAM = 0.0f;                // body-frame magnetic field Z
+
 // Process noise covariances (diagonals)
 static const float Q_pos = 0.005f;  // Position process noise variance
 static const float Q_vel = 0.1f;    // Velocity process noise variance
@@ -144,6 +151,12 @@ void EKF_Init(void) {
     EKF_gps_meas_E = 0.0f;
     EKF_gps_meas_N = 0.0f;
     EKF_gps_R = 25.0f;
+
+    // Magnetometer fusion: clear pending
+    EKF_mag_pending = 0;
+    EKF_mag_x = 0.0f;
+    EKF_mag_y = 0.0f;
+    EKF_mag_z = 0.0f;
 }
 
 void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float az, float dt) {
@@ -199,6 +212,70 @@ void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float 
         EKF_q[1] = qx / norm;
         EKF_q[2] = qy / norm;
         EKF_q[3] = qz / norm;
+    }
+}
+
+// Magnetometer heading (yaw) correction, Mahony-style, in the SAME body->nav
+// rotation convention as EKF_AttitudeUpdate/EKF_Predict (a_nav = R*a_body, with
+// the gravity/up direction in body = third row of R). The horizontal-collapse of
+// the reference field constrains heading only, leaving roll/pitch to gravity.
+// Applied on the launchpad only, to pin absolute heading and arrest the gyro yaw
+// drift that accelerometer (gravity-only) feedback cannot observe.
+//   mx,my,mz : magnetometer vector in the IMU body frame (any unit; direction only)
+//   dt       : integration interval for the complementary correction (s)
+static void EKF_MagYawUpdate(float mx, float my, float mz, float dt) {
+    float nm = sqrtf(mx*mx + my*my + mz*mz);
+    if (nm < 1e-6f) return;                 // degenerate / no field
+    float mxn = mx / nm, myn = my / nm, mzn = mz / nm;
+
+    float qw = EKF_q[0], qx = EKF_q[1], qy = EKF_q[2], qz = EKF_q[3];
+
+    // Rotation matrix R (body -> nav), identical to EKF_Predict
+    float r11 = 1.0f - 2.0f*(qy*qy + qz*qz);
+    float r12 = 2.0f*(qx*qy - qw*qz);
+    float r13 = 2.0f*(qx*qz + qw*qy);
+    float r21 = 2.0f*(qx*qy + qw*qz);
+    float r22 = 1.0f - 2.0f*(qx*qx + qz*qz);
+    float r23 = 2.0f*(qy*qz - qw*qx);
+    float r31 = 2.0f*(qx*qz - qw*qy);
+    float r32 = 2.0f*(qy*qz + qw*qx);
+    float r33 = 1.0f - 2.0f*(qx*qx + qy*qy);
+
+    // Rotate body mag into nav frame: h = R * m
+    float hx = r11*mxn + r12*myn + r13*mzn;
+    float hy = r21*mxn + r22*myn + r23*mzn;
+    float hz = r31*mxn + r32*myn + r33*mzn;
+
+    // Reference field b = [bx, 0, bz]: horizontal magnitude collapsed onto nav-East,
+    // measured inclination kept on Up. Fixes the heading origin without touching tilt.
+    float bx = sqrtf(hx*hx + hy*hy);
+    float bz = hz;
+
+    // Predicted mag direction back in body frame: w = R^T * b   (by = 0)
+    float wx = r11*bx + r31*bz;
+    float wy = r12*bx + r32*bz;
+    float wz = r13*bx + r33*bz;
+
+    // Error = measured x predicted (body frame); predominantly a yaw error vector
+    float ex = (myn*wz - mzn*wy);
+    float ey = (mzn*wx - mxn*wz);
+    float ez = (mxn*wy - myn*wx);
+
+    // Apply as a gyro-like correction integrated over dt (Kp_mag tunable on bench)
+    const float Kp_mag = 1.0f;
+    float gx = Kp_mag * ex;
+    float gy = Kp_mag * ey;
+    float gz = Kp_mag * ez;
+
+    float d_qw = 0.5f * dt * (-qx*gx - qy*gy - qz*gz);
+    float d_qx = 0.5f * dt * ( qw*gx + qy*gz - qz*gy);
+    float d_qy = 0.5f * dt * ( qw*gy - qx*gz + qz*gx);
+    float d_qz = 0.5f * dt * ( qw*gz + qx*gy - qy*gx);
+
+    qw += d_qw; qx += d_qx; qy += d_qy; qz += d_qz;
+    float qn = sqrtf(qw*qw + qx*qx + qy*qy + qz*qz);
+    if (qn > 1e-6f) {
+        EKF_q[0] = qw/qn; EKF_q[1] = qx/qn; EKF_q[2] = qy/qn; EKF_q[3] = qz/qn;
     }
 }
 
@@ -389,6 +466,17 @@ void EKF_SubmitGPS(int32_t lat_1e6, int32_t lon_1e6, uint8_t satellites) {
     EKF_gps_meas_N = meas_N;
     EKF_gps_R = R;
     EKF_gps_pending = 1;
+    taskEXIT_CRITICAL();
+}
+
+// Magnetometer injection from defaultTask (~10 Hz). Publishes the latest body-
+// frame field vector; EKF_Task applies it as a pad-phase yaw correction.
+void EKF_SubmitMag(float mx, float my, float mz) {
+    taskENTER_CRITICAL();
+    EKF_mag_x = mx;
+    EKF_mag_y = my;
+    EKF_mag_z = mz;
+    EKF_mag_pending = 1;
     taskEXIT_CRITICAL();
 }
 
@@ -651,6 +739,24 @@ void EKF_Task(void *argument) {
 
                 if (EKF_in_flight) {
                     EKF_UpdateGPS(gps_E, gps_N, gps_R);
+                }
+            }
+
+            // --- Pending magnetometer heading (yaw) correction (pad phase only) ---
+            // Consume atomically. Only correct heading before launch (calibrated &&
+            // !in_flight); in flight the attitude is gyro dead-reckoning by design,
+            // and the rocket's spin/EMI make the magnetometer unreliable.
+            if (EKF_mag_pending) {
+                float m_x, m_y, m_z;
+                taskENTER_CRITICAL();
+                m_x = EKF_mag_x;
+                m_y = EKF_mag_y;
+                m_z = EKF_mag_z;
+                EKF_mag_pending = 0;
+                taskEXIT_CRITICAL();
+
+                if (EKF_calibrated && !EKF_in_flight) {
+                    EKF_MagYawUpdate(m_x, m_y, m_z, 0.1f);  // ~10Hz buffer cadence
                 }
             }
 
