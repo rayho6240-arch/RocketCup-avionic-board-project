@@ -1864,10 +1864,25 @@ void StartDefaultTask(void *argument)
         RATE_TICK_BMP388();   /* 統計 BMP388 實際採樣率 → g_sampling_rate.bmp388.rate_hz */
     }
 
-    /* === 每 50ms：20 Hz Flash Ring Buffer 寫入 ===
-     * Flash 在 SPI3，感測器在 SPI1，兩者獨立，無需停中斷
-     */
-    if (tick % 50 == 0) {
+    /* === Flash Ring Buffer 寫入：依 FSM 狀態分級寫入速率（改善項目 F） ===
+     * Flash 在 SPI3，感測器在 SPI1，兩者獨立，無需停中斷。
+     *   INIT/PAD（發射台/初始化）：20 Hz —— 足夠且省 Flash 壽命
+     *   BOOST..MAIN_DEPLOY（飛行各相位）：50 Hz —— 提高動態階段時間解析度
+     *   LANDED（著陸後）：1 Hz —— 長時間尋標等待，大幅省 Flash 壽命
+     * 飛行率刻意取 50 Hz 而非計畫原稿的 100 Hz：FlashRing_WritePacket 內含「同步」滾動
+     * Sector 擦除（W25Q128 4KB sector 最壞 ~400ms 阻塞），會卡住主迴圈的感測器批次提取
+     * 與 EKF 饋入。50 Hz 下擦除約每 1.56s 一次（與目前 20Hz 的 3.9s 同數量級、可接受）；
+     * 要安全提升至 100 Hz 須先把擦除移到獨立低優先任務（改善項目 G，需 SPI3 mutex 與
+     * 上板時序驗證）。 */
+    uint32_t ring_period_ms;
+    if (current_fsm_state == STATE_LANDED) {
+        ring_period_ms = 1000;   /* 1 Hz */
+    } else if (current_fsm_state >= STATE_BOOST && current_fsm_state <= STATE_MAIN_DEPLOY) {
+        ring_period_ms = 20;     /* 50 Hz */
+    } else {
+        ring_period_ms = 50;     /* 20 Hz (INIT/PAD) */
+    }
+    if (tick % ring_period_ms == 0) {
         /* Flash Ring Buffer：將目前感測器數據打包寫入 */
         FlashRingPacket_t ring_pkt = {0};
         ring_pkt.tick_ms     = HAL_GetTick();
