@@ -482,6 +482,12 @@ void EKF_SubmitMag(float mx, float my, float mz) {
 
 EKF_State_t EKF_GetState(void) {
     EKF_State_t state;
+    /* 改善項目 O：原子快照。EKF_Task（High prio）會連續寫入 EKF_x/EKF_q/EKF_accel_bias，
+     * 而 defaultTask（Normal prio）於遙測 / FSM / SD 路徑呼叫本函式讀取；若不保護，
+     * High-prio 任務可能在拷貝中途搶佔，造成「位置取自舊一輪、速度取自新一輪」的撕裂讀取。
+     * 以臨界區封住拷貝期間（純記憶體搬移，數十週期），讓回傳的 state 為一致快照。
+     * 註：EKF_Task 內部亦呼叫本函式（同任務），FreeRTOS 臨界區可巢狀，安全。 */
+    taskENTER_CRITICAL();
     state.pos_x = EKF_x[0];
     state.pos_y = EKF_x[1];
     state.pos_z = EKF_x[2];
@@ -490,6 +496,7 @@ EKF_State_t EKF_GetState(void) {
     state.vel_z = EKF_x[5];
     memcpy(state.q, EKF_q, sizeof(EKF_q));
     memcpy(state.accel_bias, EKF_accel_bias, sizeof(state.accel_bias));
+    taskEXIT_CRITICAL();
     return state;
 }
 
