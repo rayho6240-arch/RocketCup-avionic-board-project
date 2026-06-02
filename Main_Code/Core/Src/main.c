@@ -1826,6 +1826,19 @@ void StartDefaultTask(void *argument)
      * 每迴圈呼叫可即時排空單句緩衝，避免連續輸出時被新句覆蓋。 */
     GPS_Update();
 
+    /* === GPS → EKF：偵測到新的有效定位才提交一次水平位置量測 ===
+     * 以 last_fix_tick 變化判斷新定位，避免每迴圈 (1kHz) 重複提交同一筆。
+     * EKF_SubmitGPS 內部負責原點鎖定與 ENU 換算；發射台 (ZUPT) 階段提交的
+     * 定位會於 EKF_Task 內被丟棄，僅飛行中真正融合。 */
+    {
+        const GPS_Data_t *gfix = GPS_GetData();
+        static uint32_t last_gps_fused_tick = 0;
+        if (gfix->fix_valid && gfix->last_fix_tick != last_gps_fused_tick) {
+            last_gps_fused_tick = gfix->last_fix_tick;
+            EKF_SubmitGPS(gfix->lat_1e6, gfix->lon_1e6, gfix->satellites);
+        }
+    }
+
     /* === MMC5983MA 地磁計 @ 10 Hz (每 100ms 一次 one-shot 量測，~3ms 阻塞) ===
      * 地磁航向僅在發射台靜置階段用於 EKF yaw 修正，10Hz 已足夠；量測在 task context。 */
     if (mag_ok && (tick % 100 == 0)) {

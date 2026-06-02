@@ -42,6 +42,17 @@ uint8_t EKF_in_flight CCMRAM = 0;
 static uint32_t EKF_launch_counter CCMRAM = 0;
 static uint32_t EKF_rest_counter CCMRAM = 0;
 
+// --- GPS horizontal-position fusion (East/North) ---
+// Written by defaultTask via EKF_SubmitGPS(), consumed once per buffer in EKF_Task.
+static volatile uint8_t EKF_gps_pending CCMRAM = 0;     // 1 = a measurement awaits application
+static uint8_t  EKF_gps_origin_set CCMRAM = 0;          // 1 = launchpad lat/lon origin captured
+static int32_t  EKF_gps_lat0_1e6 CCMRAM = 0;            // launchpad origin latitude  (deg x1e6)
+static int32_t  EKF_gps_lon0_1e6 CCMRAM = 0;            // launchpad origin longitude (deg x1e6)
+static float    EKF_gps_coslat0 CCMRAM = 1.0f;          // cos(lat0): East-scale for equirectangular proj
+static float    EKF_gps_meas_E CCMRAM = 0.0f;           // pending measured East  (m, rel. launchpad)
+static float    EKF_gps_meas_N CCMRAM = 0.0f;           // pending measured North (m, rel. launchpad)
+static float    EKF_gps_R CCMRAM = 25.0f;               // pending measurement variance (m^2)
+
 // Process noise covariances (diagonals)
 static const float Q_pos = 0.005f;  // Position process noise variance
 static const float Q_vel = 0.1f;    // Velocity process noise variance
@@ -51,6 +62,10 @@ static const float R_baro = 0.36f;  // ~0.6m altitude measurement stddev
 
 // Gravity constant in ENU
 static const float GRAVITY = 9.80665f;
+
+// GPS equirectangular-projection constants
+static const float EARTH_RADIUS_M = 6378137.0f;            // WGS84 semi-major axis
+static const float DEG2RAD = 0.017453292519943295f;        // pi / 180
 
 // -------------------------------------------------------------------------
 // FreeRTOS Task and Queue definitions mapped to CCM RAM
@@ -119,6 +134,16 @@ void EKF_Init(void) {
     EKF_in_flight = 0;
     EKF_launch_counter = 0;
     EKF_rest_counter = 0;
+
+    // GPS fusion: clear origin/pending so a fresh launchpad origin is captured
+    EKF_gps_pending = 0;
+    EKF_gps_origin_set = 0;
+    EKF_gps_lat0_1e6 = 0;
+    EKF_gps_lon0_1e6 = 0;
+    EKF_gps_coslat0 = 1.0f;
+    EKF_gps_meas_E = 0.0f;
+    EKF_gps_meas_N = 0.0f;
+    EKF_gps_R = 25.0f;
 }
 
 void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float az, float dt) {
@@ -287,6 +312,84 @@ void EKF_UpdateBaroDelayed(float baro_alt, float z_pred) {
 void EKF_UpdateBaro(float baro_alt) {
     float baro_rel = baro_alt - EKF_baro_launchpad;
     EKF_UpdateBaroDelayed(baro_rel, EKF_x[2]);
+}
+
+// Scalar position measurement update on a single state axis (idx: 0=E, 1=N, 2=U)
+// using the same Analytical Joseph Form as the barometer update. H selects row idx.
+static void EKF_UpdateScalarPos(int idx, float z, float R) {
+    float y = z - EKF_x[idx];               // Innovation
+    float S = EKF_P[idx][idx] + R;          // Innovation covariance
+    if (S < 1e-6f) return;
+    float invS = 1.0f / S;
+
+    float K[6];
+    for (int i = 0; i < 6; i++) {
+        K[i] = EKF_P[i][idx] * invS;        // Kalman gain (column idx of P)
+    }
+    for (int i = 0; i < 6; i++) {
+        EKF_x[i] += K[i] * y;               // State correction
+    }
+
+    // Joseph form: P_new = (I-KH)P(I-KH)^T + K R K^T
+    float P_prime[6][6];
+    for (int i = 0; i < 6; i++) {
+        for (int j = 0; j < 6; j++) {
+            P_prime[i][j] = EKF_P[i][j] - K[i] * EKF_P[idx][j];
+        }
+    }
+    for (int i = 0; i < 6; i++) {
+        float P_prime_ii = P_prime[i][idx];
+        for (int j = 0; j < 6; j++) {
+            EKF_P[i][j] = P_prime[i][j] - P_prime_ii * K[j] + K[i] * R * K[j];
+        }
+    }
+}
+
+// Apply the pending GPS horizontal fix as two independent scalar updates on
+// East (idx 0) and North (idx 1). Altitude (Up) is left to the barometer, which
+// is far more accurate than GPS vertical. Called from EKF_Task only.
+static void EKF_UpdateGPS(float meas_E, float meas_N, float R) {
+    EKF_UpdateScalarPos(0, meas_E, R);
+    EKF_UpdateScalarPos(1, meas_N, R);
+}
+
+// GPS injection from defaultTask (~1 Hz). Captures the launchpad origin on the
+// first valid post-calibration fix, then publishes a pending ENU measurement.
+void EKF_SubmitGPS(int32_t lat_1e6, int32_t lon_1e6, uint8_t satellites) {
+    // Only fuse once stationary calibration is done, so the GPS origin coincides
+    // with the same launchpad reference the rest of the EKF state is relative to.
+    if (!EKF_calibrated) return;
+
+    // First valid fix defines the launchpad origin (dE = dN = 0 by definition).
+    if (!EKF_gps_origin_set) {
+        EKF_gps_lat0_1e6 = lat_1e6;
+        EKF_gps_lon0_1e6 = lon_1e6;
+        EKF_gps_coslat0  = cosf((float)lat_1e6 * 1e-6f * DEG2RAD);
+        EKF_gps_origin_set = 1;
+        return;
+    }
+
+    // Equirectangular projection about the origin (accurate to <0.1% over the
+    // few-km horizontal extent of a sounding-rocket flight).
+    float dlat_deg = (float)(lat_1e6 - EKF_gps_lat0_1e6) * 1e-6f;
+    float dlon_deg = (float)(lon_1e6 - EKF_gps_lon0_1e6) * 1e-6f;
+    float meas_N = dlat_deg * DEG2RAD * EARTH_RADIUS_M;
+    float meas_E = dlon_deg * DEG2RAD * EARTH_RADIUS_M * EKF_gps_coslat0;
+
+    // Inflate measurement noise when the fix is weak (few satellites).
+    float R;
+    if      (satellites >= 8) R = 6.25f;    // ~2.5 m sigma
+    else if (satellites >= 6) R = 25.0f;    // ~5 m
+    else if (satellites >= 4) R = 100.0f;   // ~10 m
+    else                      R = 2500.0f;  // barely trust a 3-sat fix
+
+    // Publish atomically; EKF_Task (higher priority) may preempt mid-write.
+    taskENTER_CRITICAL();
+    EKF_gps_meas_E = meas_E;
+    EKF_gps_meas_N = meas_N;
+    EKF_gps_R = R;
+    EKF_gps_pending = 1;
+    taskEXIT_CRITICAL();
 }
 
 EKF_State_t EKF_GetState(void) {
@@ -530,6 +633,24 @@ void EKF_Task(void *argument) {
                     }
                 } else {
                     EKF_rest_counter = 0;
+                }
+            }
+
+            // --- Pending GPS horizontal-position update (applied once per buffer) ---
+            // Consume atomically. Only fuse during flight: on the pad the ZUPT lock
+            // zeroes horizontal state every sample, so a pad-time fix would be wiped
+            // anyway — drop it and wait for fresh in-flight fixes.
+            if (EKF_gps_pending) {
+                float gps_E, gps_N, gps_R;
+                taskENTER_CRITICAL();
+                gps_E = EKF_gps_meas_E;
+                gps_N = EKF_gps_meas_N;
+                gps_R = EKF_gps_R;
+                EKF_gps_pending = 0;
+                taskEXIT_CRITICAL();
+
+                if (EKF_in_flight) {
+                    EKF_UpdateGPS(gps_E, gps_N, gps_R);
                 }
             }
 
