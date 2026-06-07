@@ -508,7 +508,7 @@
       "plot": "garber_lora/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "lora.step",
+      "step": "../../../lora.step",
       "svg": "",
       "vrml": ""
     },

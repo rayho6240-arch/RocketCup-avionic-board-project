@@ -23,7 +23,14 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bmi088.h"
+#include "adxl375.h"
+#include "bmp388.h"
+#include "w25qxx.h"
+#include "w25q128.h"
+#include "rate_monitor.h"  /* 採樣率監測模組，要停用請在 rate_monitor.h 註解 #define RATE_MONITOR_ENABLE */
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,6 +71,8 @@ SPI_HandleTypeDef hspi3;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim7;
 
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
@@ -77,11 +86,67 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,  /* 2048 bytes: Bosch BMP3 API 深度呼叫 + VLA 需要足夠的堆疊空間 */
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+BMI088_Data_t imu_data;
+ADXL375_Data_t highg_data;
+BMP388_Data_t baro_data;
 
+uint8_t bmi088_ok = 0;
+uint8_t adxl375_ok = 0;
+uint8_t bmp388_ok = 0;
+
+/* 採樣率監測器：在 IDE Watch / Live Expressions 加入《g_sampling_rate》即可一次觀察所有感測器 */
+SAMPLING_RATE_DECL();   /* 展開為: SamplingRateAll_t g_sampling_rate */
+
+/* --- TIM3 (3.2 kHz) ADXL375 Ping-Pong 雙緩衝區宣告 --- */
+#define ADXL_BATCH_SIZE 32
+typedef struct {
+    int16_t x_raw;
+    int16_t y_raw;
+    int16_t z_raw;
+    float ax;
+    float ay;
+    float az;
+} ADXL_Sample_t;
+
+ADXL_Sample_t g_adxl_batches[2][ADXL_BATCH_SIZE];
+volatile uint8_t g_adxl_active_batch = 0;   // 當前寫入的半區 (0 or 1)
+volatile uint8_t g_adxl_sample_count = 0;   // 當前半區已累積的樣本數 (0..31)
+volatile uint8_t g_adxl_new_batch_ready = 0;// 1 代表有一批 (32筆) 數據集滿
+volatile uint8_t g_adxl_ready_batch_idx = 0;// 已集滿可讀取的半區索引
+
+/* --- TIM6 (1.6 kHz) BMI088 Accel Ping-Pong 雙緩衝區宣告 --- */
+#define BMI_ACC_BATCH_SIZE 16
+typedef struct {
+    int16_t accel_x_raw;
+    int16_t accel_y_raw;
+    int16_t accel_z_raw;
+    float ax, ay, az;
+} BMI_Accel_Sample_t;
+
+BMI_Accel_Sample_t g_bmi_acc_batches[2][BMI_ACC_BATCH_SIZE];
+volatile uint8_t g_bmi_acc_active_batch = 0;   // 當前寫入的半區 (0 or 1)
+volatile uint8_t g_bmi_acc_sample_count = 0;   // 當前半區已累積的樣本數 (0..15)
+volatile uint8_t g_bmi_acc_new_batch_ready = 0;// 1 代表有一批 (16筆) 數據集滿
+volatile uint8_t g_bmi_acc_ready_batch_idx = 0;// 已集滿可讀取的半區索引
+
+/* --- TIM7 (2.0 kHz) BMI088 Gyro Ping-Pong 雙緩衝區宣告 --- */
+#define BMI_GYRO_BATCH_SIZE 20
+typedef struct {
+    int16_t gyro_x_raw;
+    int16_t gyro_y_raw;
+    int16_t gyro_z_raw;
+    float gx, gy, gz;
+} BMI_Gyro_Sample_t;
+
+BMI_Gyro_Sample_t g_bmi_gyro_batches[2][BMI_GYRO_BATCH_SIZE];
+volatile uint8_t g_bmi_gyro_active_batch = 0;   // 當前寫入的半區 (0 or 1)
+volatile uint8_t g_bmi_gyro_sample_count = 0;   // 當前半區已累積的樣本數 (0..19)
+volatile uint8_t g_bmi_gyro_new_batch_ready = 0;// 1 代表有一批 (20筆) 數據集滿
+volatile uint8_t g_bmi_gyro_ready_batch_idx = 0;// 已集滿可讀取的半區索引
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,6 +167,8 @@ static void MX_IWDG_Init(void);
 static void MX_RTC_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM6_Init(void);
+static void MX_TIM7_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_CRC_Init(void);
 static void MX_RNG_Init(void);
@@ -160,12 +227,28 @@ int main(void)
   MX_RTC_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
+  MX_TIM6_Init();
+  MX_TIM7_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_CRC_Init();
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  if (BMI088_Init(&hspi2) == HAL_OK) {
+      bmi088_ok = 1;
+      HAL_TIM_Base_Start_IT(&htim6);                           // 啟動 TIM6 1.6 kHz 中斷採樣 (Accel)
+      HAL_TIM_Base_Start_IT(&htim7);                           // 啟動 TIM7 2.0 kHz 中斷採樣 (Gyro)
+  }
+  if (ADXL375_Init(&hspi1) == HAL_OK) {
+      adxl375_ok = 1;
+      HAL_TIM_Base_Start_IT(&htim3);                           // 啟動 TIM3 3.2 kHz 中斷採樣
+  }
+  if (BMP388_Init(&hspi1, &baro_data) == HAL_OK) {
+      bmp388_ok = 1;
+  }
 
+  /* W25Qxx SPI Flash 啟動自檢 (SPI1, CS=PA15) */
+  Flash_Test();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -389,8 +472,8 @@ static void MX_IWDG_Init(void)
 
   /* USER CODE END IWDG_Init 1 */
   hiwdg.Instance = IWDG;
-  hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
-  hiwdg.Init.Reload = 1000;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_16;                   // 16 分頻 -> 32kHz / 16 = 2000Hz (每秒計數 2000 下)
+  hiwdg.Init.Reload = 4095;                                   // 4095 載入值 -> 4095 / 2000 ≈ 2.05 秒超時 (飛行中快速復位)
   if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
   {
     Error_Handler();
@@ -700,9 +783,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = 5;                                   // 5 + 1 = 6 分頻 -> 84MHz / 6 = 14MHz
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 4374;                                    // 4374 + 1 = 4375 週期 -> 14MHz / 4375 = 3200 Hz (3.2 kHz)
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -724,6 +807,78 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 2 */
 
+}
+
+/**
+  * @brief TIM7 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM7_Init(void)
+{
+  /* USER CODE BEGIN TIM7_Init 0 */
+
+  /* USER CODE END TIM7_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM7_Init 1 */
+
+  /* USER CODE END TIM7_Init 1 */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 41;                                  // 41 + 1 = 42 分頻 -> 84MHz / 42 = 2.0MHz
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 999;                                    // 999 + 1 = 1000 週期 -> 2.0MHz / 1000 = 2000 Hz (2.0 kHz)
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM7_Init 2 */
+
+  /* USER CODE END TIM7_Init 2 */
+}
+
+/**
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 41;                                  // 41 + 1 = 42 分頻 -> 84MHz / 42 = 2.0MHz
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 1249;                                   // 1249 + 1 = 1250 週期 -> 2.0MHz / 1250 = 1600 Hz (1.6 kHz)
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
 }
 
 /**
@@ -937,7 +1092,7 @@ static void MX_DMA_Init(void)
   HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
   /* DMA2_Stream3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 3, 0);
+  HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
 
 }
@@ -1103,7 +1258,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : SDIO_DET_Pin */
   GPIO_InitStruct.Pin = SDIO_DET_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(SDIO_DET_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LORA920_INT_Pin */
@@ -1134,7 +1289,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+int _write(int file, char *ptr, int len)
+{
+  HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+  return len;
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1147,11 +1306,251 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+  uint32_t tick = 0;
+
+  /* 開機第一件事：完整讀取 W25Q128 三分區並格式化輸出到 USART2
+   * 用於確認上一次飛行數據是否完整存入，並驗證 Flash 晶片狀態 */
+  Flash_DumpAll(&hspi3);
+
+  /* 初始化採樣率監測器（Watch 視窗加入 g_sampling_rate 即可一次觀察全部 Hz） */
+  SAMPLING_RATE_INIT();
+
+  /* === SD 卡初始化與 10 秒日誌啟動 === */
+  extern FATFS SDFatFS;
+  extern FIL SDFile;
+  extern char SDPath[4];
+  uint8_t sd_logging_active = 0;
+  uint32_t sd_log_start_tick = 0;
+  char sd_fname[16] = {0};   // 本次開機使用的 SD 檔名 (e.g. HIL_003.CSV)
+  
+  // 為了防止 SDIO 在初始化、掛載與建立檔案時被高頻中斷干擾而超時失敗，在此期間暫停高頻中斷
+  __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+  __HAL_TIM_DISABLE_IT(&htim6, TIM_IT_UPDATE);
+  __HAL_TIM_DISABLE_IT(&htim7, TIM_IT_UPDATE);
+
+  printf("\r\n[SD] 正在檢測 SD 卡與進行掛載...\r\n");
+  HAL_IWDG_Refresh(&hiwdg);
+  
+  printf("[SD] 正在初始化 SDIO 介面並檢測實體 SD 卡插入狀態...\r\n");
+  HAL_IWDG_Refresh(&hiwdg);
+  
+  // 1. 物理插卡檢測，避免無卡時 f_mount 總線超時卡死
+  if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_3) == GPIO_PIN_RESET) {
+      printf("[SD] [OK] 檢測到實體 SD 卡已插入！正在掛載文件系統...\r\n");
+      HAL_IWDG_Refresh(&hiwdg);
+      
+      // 2. 立即掛載 SD 卡 (opt=1)，避免 lazy mount 導致 f_stat 遇到 FR_NOT_READY
+      if (f_mount(&SDFatFS, SDPath, 1) == FR_OK) {
+          printf("[SD] [OK] 文件系統掛載成功！正在建立 HIL_xxx.CSV 檔案...\r\n");
+          HAL_IWDG_Refresh(&hiwdg);
+          
+          // 找到第一個不存在的 HIL_xxx.CSV，確保每次開機寫入全新獨立檔案
+          FILINFO fno;
+          uint16_t fnum;
+          for (fnum = 1; fnum <= 999; fnum++) {
+              snprintf(sd_fname, sizeof(sd_fname), "HIL_%03u.CSV", fnum);
+              FRESULT fres = f_stat(sd_fname, &fno);
+              if (fres == FR_NO_FILE) break;      // 檔案不存在，用這個名稱
+              if (fres != FR_OK) {                // 真正的錯誤（卡片未就緒等）
+                  printf("[SD] [ERROR] f_stat(%s) 失敗，錯誤碼: %d\r\n", sd_fname, (int)fres);
+                  fnum = 1000;
+                  break;
+              }
+              // fres == FR_OK：檔案已存在，繼續找下一個號碼
+          }
+          printf("[SD] 準備建立新檔案: %s\r\n", sd_fname);
+          HAL_IWDG_Refresh(&hiwdg);
+
+          FRESULT fopen_res = f_open(&SDFile, sd_fname, FA_CREATE_NEW | FA_WRITE);
+          if (fopen_res == FR_OK) {
+              sd_logging_active = 1;
+              sd_log_start_tick = HAL_GetTick();
+              printf("[SD] [SUCCESS] %s 建立成功！開始進行 10 秒高頻日誌寫入...\r\n", sd_fname);
+              char header[] = "tick_ms,bmi_ax,bmi_ay,bmi_az,adxl_ax,adxl_ay,adxl_az,temp,press,alt\r\n";
+              UINT bw;
+              f_write(&SDFile, header, sizeof(header) - 1, &bw);
+          } else {
+              printf("[SD] [ERROR] 建立檔案 %s 失敗！錯誤碼: %d\r\n", sd_fname, (int)fopen_res);
+          }
+      } else {
+          printf("[SD] [ERROR] 掛載 SD 卡文件系統失敗！\r\n");
+      }
+  } else {
+      printf("[SD] [WARNING] 未檢測到實體 SD 卡插入（SDIO_DET 為高電平），跳過 10 秒日誌寫入。\r\n");
+  }
+
+  // SD 卡掛載與開檔流程結束後，重新恢復高頻中斷
+  __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
+  __HAL_TIM_ENABLE_IT(&htim6, TIM_IT_UPDATE);
+  __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
+
+  /* === Flash Ring Buffer 初始化（SPI3，不影響 SPI1 感測器中斷） ===
+   * 掃描寫入頭 + 預擦 10 個 Sector（~10×200ms = 2s），期間由函式內部餵狗 */
+  FlashRing_Init();
+
+  /* FlashRing_Init 阻塞約 2s，BMP388（主迴圈讀取）在此期間無法累積計數。
+   * 重置所有採樣率監測器，確保第一個 [RATE] 報告反映穩態採樣率。 */
+  SAMPLING_RATE_INIT();
+  HAL_IWDG_Refresh(&hiwdg);
+
   /* Infinite loop */
   for(;;)
   {
-    HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
-    osDelay(500);
+    /* --- 餵狗 (Feed the independent watchdog) --- */
+    HAL_IWDG_Refresh(&hiwdg);
+
+    /* === 10 秒 SD 卡數據實時寫入 === */
+    if (sd_logging_active) {
+        uint32_t current_elapsed = HAL_GetTick() - sd_log_start_tick;
+        if (current_elapsed < 10000U) {
+            if (tick % 10 == 0) { // 100 Hz 採樣寫入
+                char csv_buf[128];
+                int len = snprintf(csv_buf, sizeof(csv_buf), "%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
+                                   (unsigned int)current_elapsed,
+                                   (int)(imu_data.ax * 1000.0f),
+                                   (int)(imu_data.ay * 1000.0f),
+                                   (int)(imu_data.az * 1000.0f),
+                                   (int)(highg_data.ax * 1000.0f),
+                                   (int)(highg_data.ay * 1000.0f),
+                                   (int)(highg_data.az * 1000.0f),
+                                   (int)(baro_data.temperature * 100.0f),
+                                   (int)(baro_data.pressure),
+                                   (int)(baro_data.altitude * 100.0f));
+                UINT bytes_written;
+                FRESULT res = f_write(&SDFile, csv_buf, len, &bytes_written);
+                if (res != FR_OK) {
+                    printf("[SD] [ERROR] 寫入數據失敗！res=%d\r\n", res);
+                    sd_logging_active = 0;
+                }
+            }
+        } else {
+            // 達到 10 秒，關閉並儲存檔案
+            f_close(&SDFile);
+            f_mount(NULL, SDPath, 1); // 卸載檔案系統
+            sd_logging_active = 0;
+            printf("[SD] [SUCCESS] 10 秒數據寫入結束！檔案已安全關閉並儲存 (%s)。\r\n", sd_fname);
+        }
+    }
+
+    /* === BMI088 Accel Ping-Pong 雙緩衝區批次數據提取 (1.6 kHz 中斷在背後默默採樣並填充) === */
+    if (bmi088_ok && g_bmi_acc_new_batch_ready) {
+        g_bmi_acc_new_batch_ready = 0;
+        uint8_t ready_idx = g_bmi_acc_ready_batch_idx;
+
+        // 自 16 筆最新採樣數據中，提取最後一筆最新值供即時遙測傳送與顯示
+        imu_data.accel_x_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_x_raw;
+        imu_data.accel_y_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_y_raw;
+        imu_data.accel_z_raw = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_z_raw;
+        imu_data.ax          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].ax;
+        imu_data.ay          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].ay;
+        imu_data.az          = g_bmi_acc_batches[ready_idx][BMI_ACC_BATCH_SIZE - 1].az;
+
+        // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_bmi_acc_batches[ready_idx] 共 16 筆資料，即為 1.6 kHz HIL 實時存檔
+    }
+
+    /* === BMI088 Gyro Ping-Pong 雙緩衝區批次數據提取 (2.0 kHz 中斷在背後默默採樣並填充) === */
+    if (bmi088_ok && g_bmi_gyro_new_batch_ready) {
+        g_bmi_gyro_new_batch_ready = 0;
+        uint8_t ready_idx = g_bmi_gyro_ready_batch_idx;
+
+        // 自 20 筆最新採樣數據中，提取最後一筆最新值供即時遙測傳送與顯示
+        imu_data.gyro_x_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_x_raw;
+        imu_data.gyro_y_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_y_raw;
+        imu_data.gyro_z_raw  = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_z_raw;
+        imu_data.gx          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gx;
+        imu_data.gy          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gy;
+        imu_data.gz          = g_bmi_gyro_batches[ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
+
+        // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_bmi_gyro_batches[ready_idx] 共 20 筆資料，即為 2.0 kHz HIL 實時存檔
+    }
+
+    /* === ADXL375 Ping-Pong 雙緩衝區批次數據提取 (3.2 kHz 中斷在背後默默採樣並填充) === */
+    if (adxl375_ok && g_adxl_new_batch_ready) {
+        g_adxl_new_batch_ready = 0;
+        uint8_t ready_idx = g_adxl_ready_batch_idx;
+        
+        // 自 32 筆最新採樣數據中，提取最後一筆最新值供即時遙測傳送與顯示
+        highg_data.x_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].x_raw;
+        highg_data.y_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].y_raw;
+        highg_data.z_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].z_raw;
+        highg_data.ax    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ax;
+        highg_data.ay    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ay;
+        highg_data.az    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].az;
+        
+        // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_adxl_batches[ready_idx] 共 32 筆資料，即為 3.2 kHz HIL 實時存檔
+    }
+
+    /* === BMP388 @ 200 Hz (每 5ms，Normal Mode 最高 ODR=200Hz，1x OS 轉換時間 4.94ms < 5ms 週期) === */
+    if (tick % 5 == 0 && bmp388_ok) {
+        // 在任務讀取 BMP388 (SPI1) 期間，暫時關閉 TIM3 中斷，防止高優先權中斷搶佔 SPI1 匯流排
+        __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+        BMP388_ReadData(&hspi1, &baro_data);
+        __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
+        
+        RATE_TICK_BMP388();   /* 統計 BMP388 實際採樣率 → g_sampling_rate.bmp388.rate_hz */
+    }
+
+    /* === 每 50ms：20 Hz UART 遙測 + Flash Ring Buffer 寫入 ===
+     * Flash 在 SPI3，感測器在 SPI1，兩者獨立，無需停中斷
+     */
+    if (tick % 50 == 0) {
+        /* Flash Ring Buffer：將目前感測器數據打包寫入 */
+        FlashRingPacket_t ring_pkt = {0};
+        ring_pkt.tick_ms     = HAL_GetTick();
+        ring_pkt.bmi_ax      = imu_data.accel_x_raw;
+        ring_pkt.bmi_ay      = imu_data.accel_y_raw;
+        ring_pkt.bmi_az      = imu_data.accel_z_raw;
+        ring_pkt.bmi_gx      = imu_data.gyro_x_raw;
+        ring_pkt.bmi_gy      = imu_data.gyro_y_raw;
+        ring_pkt.bmi_gz      = imu_data.gyro_z_raw;
+        ring_pkt.adxl_x      = highg_data.x_raw;
+        ring_pkt.adxl_y      = highg_data.y_raw;
+        ring_pkt.adxl_z      = highg_data.z_raw;
+        ring_pkt.temperature = (int32_t)(baro_data.temperature * 100.0f);
+        ring_pkt.pressure    = (uint32_t)(baro_data.pressure);
+        ring_pkt.altitude_cm = (int32_t)(baro_data.altitude * 100.0f);
+        ring_pkt.gps_lat     = 0;
+        ring_pkt.gps_lon     = 0;
+        ring_pkt.fsm_state   = 0;
+        ring_pkt.flags       = 0;
+        FlashRing_WritePacket(&ring_pkt);
+
+        /* UART 遙測輸出
+         * 格式: bmi_ax(mg),bmi_ay(mg),bmi_az(mg),adxl_ax(mg),adxl_ay(mg),adxl_az(mg),
+         *        temp(*100 degC),press(Pa),alt(cm)
+         */
+        printf("%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
+               (int)(imu_data.ax * 1000.0f),
+               (int)(imu_data.ay * 1000.0f),
+               (int)(imu_data.az * 1000.0f),
+               (int)(highg_data.ax * 1000.0f),
+               (int)(highg_data.ay * 1000.0f),
+               (int)(highg_data.az * 1000.0f),
+               (int)(baro_data.temperature * 100.0f),
+               (int)(baro_data.pressure),
+               (int)(baro_data.altitude * 100.0f));    }
+
+    /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
+    if (tick % 500 == 0) {
+        HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
+    }
+
+#ifdef RATE_MONITOR_ENABLE
+    /* 每 1000ms 輸出一次各感測器實際採樣率，便於自動化測試腳本讀取與斷言分析 */
+    if (tick % 1000 == 0) {
+        printf("[RATE] BMI088_A:%uHz, BMI088_G:%uHz, ADXL375:%uHz, BMP388:%uHz, SD_DET:%d\r\n",
+               (unsigned int)g_sampling_rate.bmi088_acc.rate_hz,
+               (unsigned int)g_sampling_rate.bmi088_gyro.rate_hz,
+               (unsigned int)g_sampling_rate.adxl375.rate_hz,
+               (unsigned int)g_sampling_rate.bmp388.rate_hz,
+               (int)HAL_GPIO_ReadPin(SDIO_DET_GPIO_Port, SDIO_DET_Pin));
+        printf("[FLASH_RING] PKT_TOTAL:%lu ADDR:0x%06lX\r\n",
+               FlashRing_GetPacketCount(), FlashRing_GetWriteAddr());
+    }
+#endif
+
+    tick++;
+    osDelay(1); /* 1ms tick — 決定整體採樣基準 */
   }
   /* USER CODE END 5 */
 }
@@ -1174,7 +1573,99 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
+  else if (htim->Instance == TIM3)
+  {
+      if (adxl375_ok)
+      {
+          ADXL375_Data_t sensor_data;
+          // 直接在中斷中以極速阻塞讀取 ADXL375 (SPI1, ~5.6us)
+          if (ADXL375_ReadData(&hspi1, &sensor_data) == HAL_OK)
+          {
+              uint8_t current_batch = g_adxl_active_batch;
+              g_adxl_batches[current_batch][g_adxl_sample_count].x_raw = sensor_data.x_raw;
+              g_adxl_batches[current_batch][g_adxl_sample_count].y_raw = sensor_data.y_raw;
+              g_adxl_batches[current_batch][g_adxl_sample_count].z_raw = sensor_data.z_raw;
+              g_adxl_batches[current_batch][g_adxl_sample_count].ax = sensor_data.ax;
+              g_adxl_batches[current_batch][g_adxl_sample_count].ay = sensor_data.ay;
+              g_adxl_batches[current_batch][g_adxl_sample_count].az = sensor_data.az;
 
+              g_adxl_sample_count++;
+              
+              // 在中斷內進行採樣率累加，回報精準的 3200 Hz 物理採樣頻率
+              RATE_TICK_ADXL375();
+
+              if (g_adxl_sample_count >= ADXL_BATCH_SIZE)
+              {
+                  g_adxl_ready_batch_idx = current_batch;
+                  g_adxl_active_batch = !current_batch;
+                  g_adxl_sample_count = 0;
+                  g_adxl_new_batch_ready = 1;
+              }
+          }
+      }
+  }
+  else if (htim->Instance == TIM6)
+  {
+      if (bmi088_ok)
+      {
+          BMI088_Accel_t acc_raw;
+          // TIM6 1.6 kHz 中斷只讀取 BMI088 加速度計 (SPI2)
+          if (BMI088_ReadAccel(&hspi2, &acc_raw) == HAL_OK)
+          {
+              uint8_t current_batch = g_bmi_acc_active_batch;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].accel_x_raw = acc_raw.accel_x_raw;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].accel_y_raw = acc_raw.accel_y_raw;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].accel_z_raw = acc_raw.accel_z_raw;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].ax          = acc_raw.ax;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].ay          = acc_raw.ay;
+              g_bmi_acc_batches[current_batch][g_bmi_acc_sample_count].az          = acc_raw.az;
+
+              g_bmi_acc_sample_count++;
+
+              // 累加 Accel 採樣計數
+              RATE_TICK_BMI088_ACC();
+
+              if (g_bmi_acc_sample_count >= BMI_ACC_BATCH_SIZE)
+              {
+                  g_bmi_acc_ready_batch_idx = current_batch;
+                  g_bmi_acc_active_batch = !current_batch;
+                  g_bmi_acc_sample_count = 0;
+                  g_bmi_acc_new_batch_ready = 1;
+              }
+          }
+      }
+  }
+  else if (htim->Instance == TIM7)
+  {
+      if (bmi088_ok)
+      {
+          BMI088_Gyro_t gyro_raw;
+          // TIM7 2.0 kHz 中斷只讀取 BMI088 陀螺儀 (SPI2)
+          if (BMI088_ReadGyro(&hspi2, &gyro_raw) == HAL_OK)
+          {
+              uint8_t current_batch = g_bmi_gyro_active_batch;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gyro_x_raw = gyro_raw.gyro_x_raw;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gyro_y_raw = gyro_raw.gyro_y_raw;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gyro_z_raw = gyro_raw.gyro_z_raw;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gx         = gyro_raw.gx;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gy         = gyro_raw.gy;
+              g_bmi_gyro_batches[current_batch][g_bmi_gyro_sample_count].gz         = gyro_raw.gz;
+
+              g_bmi_gyro_sample_count++;
+
+              // 累加 Gyro 採樣計數
+              RATE_TICK_BMI088_GYRO();
+
+              if (g_bmi_gyro_sample_count >= BMI_GYRO_BATCH_SIZE)
+              {
+                  g_bmi_gyro_ready_batch_idx = current_batch;
+                  g_bmi_gyro_active_batch = !current_batch;
+                  g_bmi_gyro_sample_count = 0;
+                  g_bmi_gyro_new_batch_ready = 1;
+              }
+          }
+      }
+  }
   /* USER CODE END Callback 1 */
 }
 

@@ -505,13 +505,13 @@
   },
   "pcbnew": {
     "last_paths": {
-      "gencad": "",
+      "gencad": "../../../Second_layer_MCU.cad",
       "idf": "",
       "netlist": "",
       "plot": "garber_MCU/",
       "pos_files": "./",
       "specctra_dsn": "",
-      "step": "Second_layer_MCU.step",
+      "step": "../../../Second_layer_MCU.step",
       "svg": "",
       "vrml": ""
     },
