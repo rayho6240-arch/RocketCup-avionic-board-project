@@ -1425,21 +1425,37 @@ int _write(int file, char *ptr, int len)
  * 此處職責：組輸入快照 → FSM_Step() → 執行硬體動作 → 鏡射全域 → 事件列印。
  * 硬體動作（點火/舵機/蜂鳴器）嚴格先於 printf：避免 UART 阻塞（~9ms/行）延遲開傘。 */
 static FSM_Context_t g_fsm_ctx;
+volatile uint8_t g_fsm_failsafe_fired = 0;   /* 失效保護點火鎖存（telemetry TELEM_FLAG_FAILSAFE 讀取） */
 
 static void FSM_Update(void)
 {
     EKF_State_t ekf_state = EKF_GetState();
     uint32_t now = HAL_GetTick();
 
+    /* === P0-B：baro 發射台基準（pad_ref） ===
+     * PAD/INIT 期每 30s 重零（抗氣象漂移），起飛後凍結；
+     * 首筆有效氣壓樣本（pressure > 1000 Pa）才建立基準，避免開機初期髒值。 */
+    static float    pad_ref       = 0.0f;
+    static uint8_t  pad_ref_valid = 0U;
+    static uint32_t pad_ref_tick  = 0U;
+    if (g_fsm_ctx.state <= STATE_PAD && baro_data.pressure > 1000.0f) {
+        if (!pad_ref_valid || (now - pad_ref_tick) >= 30000U) {
+            pad_ref       = baro_data.altitude;
+            pad_ref_valid = 1U;
+            pad_ref_tick  = now;
+        }
+    }
+
     FSM_Input_t in;
     in.now_ms         = now;
     in.h_est          = ekf_state.pos_z;   // 卡爾曼估計高度 (m)
     in.v_est          = ekf_state.vel_z;   // 卡爾曼估計垂直速度 (m/s)
     in.a_z_g          = highg_data.az;     // 高 G 垂直加速度 (g)
-    in.baro_alt_rel   = 0.0f;              // P0-B 起由 pad 基準計算
+    in.baro_alt_rel   = pad_ref_valid ? (baro_data.altitude - pad_ref) : 0.0f;
     in.ekf_calibrated = EKF_calibrated;
     in.ekf_healthy    = 1U;                // P0-C 起接 EKF_GetHealthBits()
-    in.sensor_bits    = 0U;                // P0-D 起接 sensor_health
+    /* P0-D 起接 sensor_health；目前以「BMP388 初始化成功且 pad 基準已建立」閘控 baro 路徑 */
+    in.sensor_bits    = (bmp388_ok && pad_ref_valid) ? 0U : FSM_SB_BARO_FAULT;
 
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
@@ -1478,6 +1494,11 @@ static void FSM_Update(void)
         case FSM_EVT_APOGEE:
             printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
                    act.apogee_t_pred, in.h_est);
+            break;
+        case FSM_EVT_APOGEE_FAILSAFE:
+            g_fsm_failsafe_fired = 1U;
+            printf("[FSM] ⏰ FAILSAFE APOGEE TIMEOUT (%lu ms)! Forcing DROGUE deployment (h_est: %.2f m, baro_rel: %.2f m).\r\n",
+                   (unsigned long)FSM_FAILSAFE_APOGEE_MS, in.h_est, in.baro_alt_rel);
             break;
         case FSM_EVT_DROGUE_DONE:
             printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");

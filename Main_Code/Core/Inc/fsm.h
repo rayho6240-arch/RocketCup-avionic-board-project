@@ -53,12 +53,29 @@ typedef enum {
 #define FSM_STEP_PERIOD_MS       10U     // 呼叫頻率契約：100 Hz
 #define FSM_STEP_PERIOD_S        0.010f  // COAST 速度差分用的週期 (s)
 
+/* === P0-B：頂點失效保護與 baro 原始趨勢交叉檢查（皆不依賴 EKF） === */
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ * !! FSM_FAILSAFE_APOGEE_MS 為「無飛行模擬資料」下的保守暫定值。      !!
+ * !! 飛行前必須以 OpenRocket 模擬重新推導：取 1.5 × t_apogee_sim，   !!
+ * !! 且滿足 ≥ t_apogee_sim + 5s、≤ FSM_MAIN_WATCHDOG_MS − 5s。       !!
+ * !! 推導依據：150m 主傘目標 + 25s 全程看門狗 → 本級別火箭頂點約     !!
+ * !! 8–12s，15s 高於任何合理頂點 ≥3s，仍保留副傘→主傘序列時間。      !!
+ * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+#define FSM_FAILSAFE_APOGEE_MS   15000U  // 起飛起算強制點火副傘（BOOST 與 COAST 皆生效）
+#define FSM_BARO_APOGEE_DROP_M   10.0f   // baro 原始高度自峰值回落門檻 (m)（≈BMP388 噪聲 16σ）
+#define FSM_BARO_APOGEE_CONSEC   20U     // 連續 20 週期（200ms）成立（防雜訊）
+#define FSM_LIFTOFF_BARO_ALT_M   20.0f   // 起飛第三冗餘：baro 相對高度門檻 (m)
+
+/* sensor_bits 輸入位元契約（P0-D 起由 sensor_health 餵入；P0-B 起 FSM 即依此閘控 baro 路徑） */
+#define FSM_SB_BARO_FAULT        0x01U   // baro 失效/不可信 → 停用 baro 交叉檢查與 baro 起飛冗餘
+
 /* === 事件（供呼叫端列印 / 記錄；一次 FSM_Step 至多一個事件） === */
 typedef enum {
     FSM_EVT_NONE = 0,
     FSM_EVT_LIFTOFF,       // PAD → BOOST
     FSM_EVT_BURNOUT,       // BOOST → COAST
     FSM_EVT_APOGEE,        // COAST → APOGEE（同時 fire_drogue）
+    FSM_EVT_APOGEE_FAILSAFE, // 失效保護計時器強制點火（BOOST/COAST → APOGEE，同時 fire_drogue）
     FSM_EVT_DROGUE_DONE,   // APOGEE → DESCENT（同時 release_drogue）
     FSM_EVT_MAIN_DEPLOY,   // DESCENT → MAIN_DEPLOY（同時 deploy_main）
     FSM_EVT_MAIN_OPEN,     // MAIN_DEPLOY → LANDED（充氣等待結束）
@@ -97,6 +114,9 @@ typedef struct {
     uint8_t  consec_apogee_counts;
     uint8_t  touchdown_latched;   // 落地一次性觸發（原 g_touchdown_tick==0 判斷）
     uint8_t  drogue_fired;        // 副傘已點火鎖存（熱啟動防二次點火，P0-F 使用）
+    float    max_alt_baro;        // COAST 期 baro 原始相對高度滾動峰值（P0-B 交叉檢查）
+    uint8_t  consec_baro_drop;    // baro 自峰值回落連續週期計數（P0-B）
+    uint8_t  failsafe_fired;      // 失效保護計時器已觸發（遙測 TELEM_FLAG_FAILSAFE）
 } FSM_Context_t;
 
 /*

@@ -30,6 +30,7 @@ extern volatile uint16_t g_bat_voltage_mv;   /* 飛控迴圈更新的最新電�
 extern uint8_t           adxl375_ok;
 extern uint8_t           mag_ok;
 extern uint8_t           sd_logging_active;
+extern volatile uint8_t  g_fsm_failsafe_fired;  /* P0-B：失效保護計時器強制點火鎖存 */
 extern TIM_HandleTypeDef htim4;              /* PWM_Servo（主傘舵機）CH3 */
 
 /* float → int16 飽和轉換，避免大數值 wrap 成錯誤負值 */
@@ -125,6 +126,7 @@ uint16_t Telemetry_Build(uint8_t *out)
     if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000)         flags |= TELEM_FLAG_MAIN_DEPLOYED;
     if (sd_logging_active)                                            flags |= TELEM_FLAG_SD_ACTIVE;
     if (GPS_IsStale(2000))                                            flags |= TELEM_FLAG_GPS_STALE;
+    if (g_fsm_failsafe_fired)                                         flags |= TELEM_FLAG_FAILSAFE;
     pkt.flags = flags;
 
     /* --- CRC16 覆蓋除最後 2 bytes(crc16 本身) 外的全部內容 --- */

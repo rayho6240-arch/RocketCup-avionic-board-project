@@ -33,12 +33,31 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
         ctx->max_altitude = h_est;
     }
 
+    const uint8_t baro_ok = ((in->sensor_bits & FSM_SB_BARO_FAULT) == 0U);
+
+    /* === P0-B：頂點絕對失效保護（最後防線，不依賴任何感測器/EKF） ===
+     * BOOST 與 COAST 皆生效：即使燒完判定失效卡在 BOOST、或 EKF 向上發散使
+     * 頂點條件永不成立，起飛後 FSM_FAILSAFE_APOGEE_MS 仍強制點火副傘。 */
+    if ((ctx->state == STATE_BOOST || ctx->state == STATE_COAST) &&
+        (now - ctx->flight_start_ms) >= FSM_FAILSAFE_APOGEE_MS) {
+        ctx->state            = STATE_APOGEE;
+        ctx->state_entered_ms = now;
+        ctx->drogue_fired     = 1U;
+        ctx->failsafe_fired   = 1U;
+        act.fire_drogue       = 1U;   // 強制導通副傘引爆 MOSFET (PD13 = HIGH)
+        act.event             = FSM_EVT_APOGEE_FAILSAFE;
+        ctx->last_vel_z = v_est;
+        return act;
+    }
+
     switch (ctx->state) {
         case STATE_PAD:
             // 等待靜態校準完成
             if (in->ekf_calibrated) {
-                // 起飛觸發條件：高G加速度 > 3.0g 或是高度 > 10.0m
-                if (a_z > FSM_LIFTOFF_ACCEL_G || h_est > FSM_LIFTOFF_ALT_M) {
+                // 起飛觸發條件：高G加速度 > 3.0g 或高度 > 10.0m
+                // 或 baro 相對高度 > 20.0m（P0-B 第三冗餘：ADXL 與 EKF 雙失效仍可偵測起飛）
+                if (a_z > FSM_LIFTOFF_ACCEL_G || h_est > FSM_LIFTOFF_ALT_M ||
+                    (baro_ok && in->baro_alt_rel > FSM_LIFTOFF_BARO_ALT_M)) {
                     ctx->state            = STATE_BOOST;
                     ctx->flight_start_ms  = now;
                     ctx->state_entered_ms = now;
@@ -69,15 +88,35 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
 
             float t_to_apogee = -v_est / decel;
 
+            /* P0-B：baro 原始趨勢交叉檢查（完全不依賴 EKF）。
+             * 追蹤 COAST 期 baro 相對高度滾動峰值，自峰值回落 ≥10m 並連續 20 週期
+             * （200ms）即視為已過頂點。EKF 向上發散時這是真正在頂點附近開傘的
+             * 主路徑（失效保護計時器只是更晚的最後防線）。 */
+            uint8_t baro_apogee = 0;
+            if (baro_ok) {
+                if (in->baro_alt_rel > ctx->max_alt_baro) {
+                    ctx->max_alt_baro = in->baro_alt_rel;
+                }
+                if ((ctx->max_alt_baro - in->baro_alt_rel) >= FSM_BARO_APOGEE_DROP_M) {
+                    if (ctx->consec_baro_drop < 255U) ctx->consec_baro_drop++;
+                } else {
+                    ctx->consec_baro_drop = 0U;
+                }
+                baro_apogee = (ctx->consec_baro_drop >= FSM_BARO_APOGEE_CONSEC) ? 1U : 0U;
+            }
+
             // 頂點判定條件：
             // 1. 動態預測時間 <= 4.0s (且仍處於上升狀態 v_est > 0)
             // 2. 備用安全判定：垂直速度過零 (v_est < -0.2 m/s) 或是高度從峰值下降超過 5.0m
+            // 3. P0-B：baro 原始趨勢交叉檢查（上方 baro_apogee）
             // 同時必須滿足起飛時間鎖（起飛後累計大於 3.0 秒）
             uint8_t apogee_condition = 0;
             if (v_est > 0.0f && t_to_apogee <= DROGUE_LEAD_TIME_S) {
                 apogee_condition = 1;
             } else if (v_est < -FSM_APOGEE_VFALL_MPS ||
                        (ctx->max_altitude - h_est) > FSM_APOGEE_ALT_DROP_M) {
+                apogee_condition = 1;
+            } else if (baro_apogee) {
                 apogee_condition = 1;
             }
 
