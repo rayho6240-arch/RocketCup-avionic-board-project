@@ -85,6 +85,9 @@ typedef struct __attribute__((packed)) {
     uint16_t cpu_ekf_x10;    /* EKFTask CPU 佔用率 (% ×10) */
     uint8_t  flags;          /* TELEM_FLAG_* 位元旗標 */
 
+    uint8_t  health_bits;    /* P1：EKF_HB_*（ekf_guard.h；0=EKF 全健康） */
+    uint8_t  sensor_bits;    /* P1：SH_BIT_*（sensor_health.h；0=感測器全健康） */
+
     uint16_t crc16;          /* CRC-16/CCITT-FALSE，覆蓋本封包前面所有位元組 */
 } TelemetryPacket_t;
 

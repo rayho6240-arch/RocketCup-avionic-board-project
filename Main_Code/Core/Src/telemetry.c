@@ -17,6 +17,7 @@
 #include "gps.h"
 #include "mmc5983.h"
 #include "sensor_axis.h"
+#include "crc16.h"
 
 #include <string.h>
 
@@ -45,15 +46,7 @@ static int16_t sat_i16(float v)
 
 uint16_t telem_crc16(const uint8_t *data, uint16_t len)
 {
-    uint16_t crc = 0xFFFFu;
-    for (uint16_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t b = 0; b < 8; b++) {
-            if (crc & 0x8000u) crc = (uint16_t)((crc << 1) ^ 0x1021u);
-            else               crc = (uint16_t)(crc << 1);
-        }
-    }
-    return crc;
+    return crc16_ccitt_false(data, len);   /* P1：統一至 crc16.h 單一實作 */
 }
 
 uint16_t Telemetry_Build(uint8_t *out)
@@ -133,6 +126,10 @@ uint16_t Telemetry_Build(uint8_t *out)
     if (g_fsm_failsafe_fired)                                         flags |= TELEM_FLAG_FAILSAFE;
     if (g_hotstart_restored)                                          flags |= TELEM_FLAG_HOTSTART;
     pkt.flags = flags;
+
+    /* --- P1：完整健康位（flags 僅是「有/無問題」摘要，這裡給出哪一位故障） --- */
+    pkt.health_bits = EKF_GetHealthBits();
+    pkt.sensor_bits = g_sensor_fault_bits;
 
     /* --- CRC16 覆蓋除最後 2 bytes(crc16 本身) 外的全部內容 --- */
     pkt.crc16 = telem_crc16((const uint8_t *)&pkt, (uint16_t)(sizeof(pkt) - 2));

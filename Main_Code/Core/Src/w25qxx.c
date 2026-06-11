@@ -18,6 +18,7 @@
 
 #include "w25qxx.h"
 #include "spi3_bus.h"   /* SPI3 與 E80 920MHz LoRa 共用，CS 期間須持互斥鎖 */
+#include "crc16.h"      /* P1：CRC-16/CCITT-FALSE 單一實作 */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -467,13 +468,7 @@ static uint32_t ring_pool_bytes(void)
 
 uint16_t ring_crc16(const uint8_t *data, uint16_t len)
 {
-    uint16_t crc = 0xFFFF;
-    for (uint16_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t j = 0; j < 8; j++)
-            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : (crc << 1);
-    }
-    return crc;
+    return crc16_ccitt_false(data, len);   /* P1：統一至 crc16.h 單一實作（符號保留，多處引用） */
 }
 
 void FlashRing_Init(void)
