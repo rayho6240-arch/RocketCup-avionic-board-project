@@ -338,8 +338,13 @@ int main(void)
 
   /* E22-400T30S 433MHz LoRa 啟動（UART3 透傳模式 M0=M1=0）。
    * 重置 + 等 AUX 拉高；未接模組也不阻擋啟動（發送由 AUX 背壓守護）。 */
-  LoRaE22_Init(&huart3);
-  lora433_ok = 1;   /* 透傳模式無讀回驗證，標記為已嘗試初始化 */
+  /* P1：AUX 逾時不再視為成功 —— lora433_ok=0 時遙測任務每 10s 重試 init */
+  if (LoRaE22_Init(&huart3) == HAL_OK) {
+      lora433_ok = 1;
+  } else {
+      lora433_ok = 0;
+      printf("[LORA] E22 433MHz AUX 逾時（模組未回應），遙測任務將週期性重試。\r\n");
+  }
   printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
 
   /* E80-900M2213S 920MHz LoRa 啟動（SX126x/LLCC68, SPI3，與 Flash 共用匯流排）。
@@ -1418,6 +1423,17 @@ static void MX_GPIO_Init(void)
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
+  /* P1：LORA920_BUSY (PD6) 由 CubeMX 的 IT_RISING_FALLING 覆寫為純輸入。
+   * lora_e80.c 只輪詢 BUSY、從不用中斷；E80 SPI 交易期間 BUSY 高頻 toggle
+   * 會狂觸 EXTI9_5 ISR（無動作純開銷，與 BMI/ADXL 中斷搶 CPU）。
+   * DeInit 清除 EXTI line 6 映射（PD6 為該 line 唯一使用者）再重設為輸入；
+   * 放在 USER CODE 區塊，CubeMX 重新產生程式碼後仍保留本覆寫。 */
+  HAL_GPIO_DeInit(LORA920_BUSY_GPIO_Port, LORA920_BUSY_Pin);
+  GPIO_InitStruct.Pin  = LORA920_BUSY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(LORA920_BUSY_GPIO_Port, &GPIO_InitStruct);
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -1584,8 +1600,18 @@ void LoRaTelemetry_Task(void *argument)
     osDelay(2000);
 
     uint32_t wake = osKernelGetTickCount();
+    uint32_t e22_retry_tick = 0;
     for (;;) {
         uint16_t len = Telemetry_Build(tx_buf);
+
+        /* P1：E22 初始化失敗時每 10s 重試一次（本任務最低優先，~305ms 阻塞無妨） */
+        if (!lora433_ok && (HAL_GetTick() - e22_retry_tick) >= 10000U) {
+            e22_retry_tick = HAL_GetTick();
+            if (LoRaE22_Init(&huart3) == HAL_OK) {
+                lora433_ok = 1;
+                printf("[LORA] E22 433MHz 重試成功，恢復下行。\r\n");
+            }
+        }
 
         if (lora433_ok) {
             LoRaE22_Send(tx_buf, len);            /* 忙線(AUX low)回 HAL_BUSY，本次跳過 */

@@ -25,7 +25,7 @@ static uint8_t e22_wait_aux_high(uint32_t timeout_ms)
     return 1;
 }
 
-void LoRaE22_Init(UART_HandleTypeDef *huart)
+HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart)
 {
     s_huart = huart;
 
@@ -38,10 +38,14 @@ void LoRaE22_Init(UART_HandleTypeDef *huart)
     HAL_Delay(5);
     HAL_GPIO_WritePin(LORA433_RST_GPIO_Port, LORA433_RST_Pin, GPIO_PIN_SET);
 
-    /* 等模組開機完成（AUX 拉高）；逾時也繼續（模組可能未接，發送由 AUX 背壓守護） */
-    (void)e22_wait_aux_high(LORA_E22_AUX_BOOT_TIMEOUT_MS);
+    /* 等模組開機完成（AUX 拉高）。
+     * P1：逾時不再靜默吞掉 —— 回報 HAL_TIMEOUT 讓呼叫端標記 lora433_ok=0
+     * 並由遙測任務週期性重試；s_inited 仍設 1（發送有 AUX 背壓守護，
+     * 模組若稍後恢復即可直接收發）。 */
+    uint8_t aux_ready = e22_wait_aux_high(LORA_E22_AUX_BOOT_TIMEOUT_MS);
 
     s_inited = 1;
+    return aux_ready ? HAL_OK : HAL_TIMEOUT;
 }
 
 uint8_t LoRaE22_IsReady(void)

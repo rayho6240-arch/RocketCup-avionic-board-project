@@ -24,10 +24,11 @@ extern "C" {
 
 /**
  * @brief 綁定 UART 並將模組設為透傳模式（M0=M1=0）+ 硬體重置，等 AUX 拉高。
- *        於 main() 初始化區（scheduler 啟動前）呼叫一次。
+ *        於 main() 初始化區呼叫；失敗時可由低優先任務週期性重試（P1）。
  * @param huart E22 所掛的 UART（本專案為 &huart3）。
+ * @return HAL_OK = AUX 已就緒；HAL_TIMEOUT = 模組未回應（呼叫端標記 lora433_ok=0）。
  */
-void LoRaE22_Init(UART_HandleTypeDef *huart);
+HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart);
 
 /**
  * @brief 透傳發送一筆位元組。
