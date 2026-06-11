@@ -1500,6 +1500,10 @@ static void FSM_Update(void)
         g_touchdown_tick = now;   // 記錄落地時刻：SD 記錄降為 10Hz，逾時或按 USER_BT1 後關檔
     }
 
+    /* P0-E：飛行態（BOOST..MAIN_DEPLOY）禁止 Flash 同步滾動擦除（~400ms 阻塞） */
+    FlashRing_SetEraseAllowed((g_fsm_ctx.state >= STATE_BOOST &&
+                               g_fsm_ctx.state <= STATE_MAIN_DEPLOY) ? 0U : 1U);
+
     /* --- 3. 事件列印（訊息逐字保留自原 FSM_Update） --- */
     switch ((FSM_Event_t)act.event) {
         case FSM_EVT_LIFTOFF:
@@ -1538,7 +1542,9 @@ static void FSM_Update(void)
 uint16_t ADC_Read_Battery_mv(void) {
     uint32_t val = 0;
     HAL_ADC_Start(&hadc1);
-    if (HAL_ADC_PollForConversion(&hadc1, 10U) == HAL_OK) {
+    /* P0-E：逾時 10ms→2ms。ADC1 12-bit 轉換僅 ~µs 級，2ms 已極寬裕；
+     * 10ms 逾時在 ADC 故障時會凍結 1kHz 飛控迴圈 10 個週期。 */
+    if (HAL_ADC_PollForConversion(&hadc1, 2U) == HAL_OK) {
         val = HAL_ADC_GetValue(&hadc1);
     }
     HAL_ADC_Stop(&hadc1);
@@ -2243,8 +2249,7 @@ void StartDefaultTask(void *argument)
         if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000) sys_flags |= 0x02; // 主傘已釋放
         ring_pkt.flags       = sys_flags;
         
-        g_bat_voltage_mv = ADC_Read_Battery_mv();   /* 供 LoRa 遙測與 [PWR] 行讀取（唯一 ADC 讀取點，避免並發） */
-        ring_pkt.bat_voltage_mv = g_bat_voltage_mv;
+        ring_pkt.bat_voltage_mv = g_bat_voltage_mv;   /* P0-E：改用 1Hz 快取（ADC 讀取移出 50Hz 寫入路徑） */
         
         ring_pkt.bmi_ax      = imu_data.accel_x_raw;
         ring_pkt.bmi_ay      = imu_data.accel_y_raw;
@@ -2284,8 +2289,26 @@ void StartDefaultTask(void *argument)
         FlashRing_WritePacket(&ring_pkt);
     }
 
-    /* === 每 100ms：10 Hz UART 遙測輸出 (減少 CPU 阻塞開銷) === */
-    if (tick % 100 == 0) {
+    /* === P0-E：1Hz 電池電壓 ADC 讀取（自 50Hz Flash 寫入路徑移出；唯一 ADC 讀取點） === */
+    if (tick % 1000 == 250) {
+        g_bat_voltage_mv = ADC_Read_Battery_mv();
+    }
+
+    /* === P0-E：PAD/INIT 期背景預擦（每 1s 擦 1 個 sector，單次最壞 ~400ms < IWDG 2.05s）
+     * 發射檢核表：上架後等待 [FLASH] pool 達 64 再允許起飛。 === */
+    if (tick % 1000 == 500 && current_fsm_state <= STATE_PAD) {
+        if (FlashRing_PreEraseOne() == 0U) {
+            printf("[FLASH] pool=%lu/%u\r\n",
+                   (unsigned long)FlashRing_GetPoolSectors(),
+                   (unsigned)FLASH_RING_PREERASE_TARGET);
+        }
+    }
+
+    /* === 每 100ms：10 Hz UART 遙測輸出 (減少 CPU 阻塞開銷)
+     * P0-E：飛行態（BOOST..MAIN_DEPLOY）抑制 —— 每行 ~8.7ms 阻塞 UART，
+     * SD/Flash/LoRa 記錄不受影響，USB 串口僅 bench 使用。 === */
+    if (tick % 100 == 0 &&
+        !(current_fsm_state >= STATE_BOOST && current_fsm_state <= STATE_MAIN_DEPLOY)) {
         /* UART 遙測輸出
          * 格式: bmi_ax(mg),bmi_ay(mg),bmi_az(mg),adxl_ax(mg),adxl_ay(mg),adxl_az(mg),
          *        temp(*100 degC),press(Pa),alt(cm)
@@ -2346,6 +2369,12 @@ void StartDefaultTask(void *argument)
     uint32_t loop_end_cycles = DWT->CYCCNT;
     uint32_t loop_elapsed_cycles = loop_end_cycles - loop_start_cycles;
 
+    /* P0-E：單迴圈最大耗時水位（HIL 斷言飛行態 < 20ms 的依據） */
+    static uint32_t loop_max_cycles = 0;
+    if (loop_elapsed_cycles > loop_max_cycles) {
+        loop_max_cycles = loop_elapsed_cycles;
+    }
+
     uint32_t current_tick = HAL_GetTick();
     if (main_task_last_calc_tick == 0) {
         main_task_last_calc_tick = current_tick;
@@ -2357,6 +2386,10 @@ void StartDefaultTask(void *argument)
         if (total_possible_cycles > 0) {
             g_main_task_cpu_usage = (float)main_task_accumulated_cycles / (float)total_possible_cycles * 100.0f;
         }
+        /* P0-E：1Hz 印出本秒最大單迴圈耗時（µs）並重置水位 */
+        printf("[LOOP] max_us=%lu\r\n",
+               (unsigned long)(loop_max_cycles / (SystemCoreClock / 1000000U)));
+        loop_max_cycles = 0;
         main_task_accumulated_cycles = 0;
         main_task_last_calc_tick = current_tick;
     }

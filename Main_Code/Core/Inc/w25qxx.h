@@ -77,6 +77,7 @@ typedef enum {
     W25QXX_ERR_TIMEOUT  = 2,   /* 等待 BUSY 逾時 */
     W25QXX_ERR_ID       = 3,   /* JEDEC ID 不符 */
     W25QXX_ERR_PARAM    = 4,   /* 參數錯誤 */
+    W25QXX_ERR_NO_POOL  = 5,   /* P0-E：飛行中預擦池耗盡，本筆丟棄（禁同步擦除） */
 } W25QXX_StatusTypeDef;
 
 /* ============================================================
@@ -203,6 +204,12 @@ void Flash_Test(void);
 #define FLASH_RING_PACKET_SIZE   80UL         /* 每筆封包大小調整為 80 bytes */
 #define FLASH_RING_PREERASE_N    10           /* 開機預擦 Sector 數量 */
 
+/* P0-E：PAD 期背景預擦目標池。64 sectors × 51 封包 ÷ 50Hz ≈ 65s 飛行容量（>2× 全程）。
+ * 飛行態（BOOST..MAIN_DEPLOY）禁止同步滾動擦除（最壞 ~400ms 阻塞主迴圈，FSM 停擺、
+ * EKF 斷饋且持 SPI3 mutex）—— 池耗盡時丟棄該筆並計數（遙測可觀測）。
+ * ⚠️ 飛行時間 >60s 的任務需加大此值，並於發射檢核表確認 [FLASH] pool 達標後才起飛。 */
+#define FLASH_RING_PREERASE_TARGET 64U        /* PAD 期背景預擦目標（sectors） */
+
 /* ============================================================
  *  結構體定義
  * ============================================================ */
@@ -318,6 +325,21 @@ uint32_t FlashRing_GetWriteAddr(void);
 
 /** @brief 取得累計寫入封包數 */
 uint32_t FlashRing_GetPacketCount(void);
+
+/* === P0-E：飛行中擦除禁令 + PAD 期背景預擦池 === */
+
+/** @brief 設定是否允許 WritePacket 內同步滾動擦除（飛行態 BOOST..MAIN_DEPLOY 設 0） */
+void FlashRing_SetEraseAllowed(uint8_t allowed);
+
+/** @brief 背景預擦一個 Sector（PAD/INIT 期每 1s 呼叫一次；單次最壞 ~400ms）
+ *  @retval 1 = 池已達 FLASH_RING_PREERASE_TARGET（無動作），0 = 已擦一個或擦除失敗 */
+uint8_t FlashRing_PreEraseOne(void);
+
+/** @brief 取得目前預擦池大小（sectors） */
+uint32_t FlashRing_GetPoolSectors(void);
+
+/** @brief 取得因池耗盡而丟棄的封包數（飛行中擦除禁令生效時累計） */
+uint32_t FlashRing_GetDropCount(void);
 
 /** @brief 公用 CRC-16/CCITT 計算函數 */
 uint16_t ring_crc16(const uint8_t *data, uint16_t len);

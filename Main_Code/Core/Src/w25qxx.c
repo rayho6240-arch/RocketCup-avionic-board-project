@@ -452,6 +452,18 @@ static uint32_t s_ring_write_addr   = FLASH_RINGBUF_ADDR;
 static uint32_t s_ring_erased_end   = FLASH_RINGBUF_ADDR;  /* 預擦區終止地址（exclusive） */
 static uint32_t s_ring_packet_count = 0;
 static uint16_t s_ring_seq          = 0;
+static volatile uint8_t  s_ring_erase_allowed = 1;  /* P0-E：0 = 飛行中禁同步擦除 */
+static volatile uint32_t s_ring_drop_count    = 0;  /* P0-E：池耗盡丟棄計數 */
+
+/* P0-E：目前預擦池大小（bytes；exclusive-end 環形語意與 write/erase 指標一致） */
+static uint32_t ring_pool_bytes(void)
+{
+    if (s_ring_erased_end >= s_ring_write_addr) {
+        return s_ring_erased_end - s_ring_write_addr;
+    }
+    return (FLASH_RINGBUF_END + 1UL - s_ring_write_addr) +
+           (s_ring_erased_end - FLASH_RINGBUF_ADDR);
+}
 
 uint16_t ring_crc16(const uint8_t *data, uint16_t len)
 {
@@ -528,8 +540,20 @@ void FlashRing_Init(void)
 
 W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
 {
-    /* 若即將超出預擦區，滾動擦除下一個 Sector */
-    if (s_ring_write_addr + FLASH_RING_PACKET_SIZE > s_ring_erased_end) {
+    /* 若即將超出預擦區，滾動擦除下一個 Sector。
+     * P0-E：飛行態（erase_allowed=0）禁止同步擦除 —— 最壞 ~400ms 阻塞主迴圈
+     * （FSM 停擺、EKF 斷饋、持 SPI3 mutex），可能正落在頂點窗口。
+     * 池耗盡時丟棄該筆並計數（PAD 期背景預擦 64 sectors ≈ 65s 飛行量，
+     * 正常不應發生；發射檢核表須確認 [FLASH] pool 達標）。 */
+    if (ring_pool_bytes() < FLASH_RING_PACKET_SIZE) {
+        if (!s_ring_erase_allowed) {
+            s_ring_drop_count++;
+            if ((s_ring_drop_count % 100U) == 1U) {   /* 限流：首筆與每 100 筆印一次 */
+                printf("[FLASH_RING] pool exhausted in flight, dropped=%lu\r\n",
+                       (unsigned long)s_ring_drop_count);
+            }
+            return W25QXX_ERR_NO_POOL;
+        }
         W25QXX_StatusTypeDef ret = W25QXX_EraseSector(s_ring_erased_end);
         HAL_IWDG_Refresh(&hiwdg);
         if (ret != W25QXX_OK) {
@@ -574,6 +598,38 @@ W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
 
 uint32_t FlashRing_GetWriteAddr(void)   { return s_ring_write_addr; }
 uint32_t FlashRing_GetPacketCount(void) { return s_ring_packet_count; }
+
+/* === P0-E：飛行中擦除禁令 + PAD 期背景預擦池 === */
+
+void FlashRing_SetEraseAllowed(uint8_t allowed)
+{
+    s_ring_erase_allowed = (allowed != 0U);
+}
+
+uint8_t FlashRing_PreEraseOne(void)
+{
+    if (ring_pool_bytes() >= (uint32_t)FLASH_RING_PREERASE_TARGET * W25QXX_SECTOR_SIZE) {
+        return 1U;   /* 池已達標 */
+    }
+    /* exclusive-end 語意：erased_end 可能停在 FLASH_RINGBUF_END+1，先迴繞再擦 */
+    uint32_t target = (s_ring_erased_end > FLASH_RINGBUF_END)
+                      ? FLASH_RINGBUF_ADDR : s_ring_erased_end;
+    if (W25QXX_EraseSector(target) != W25QXX_OK) {
+        return 0U;   /* 擦除失敗：下次再試 */
+    }
+    s_ring_erased_end = target + W25QXX_SECTOR_SIZE;
+    return 0U;
+}
+
+uint32_t FlashRing_GetPoolSectors(void)
+{
+    return ring_pool_bytes() / W25QXX_SECTOR_SIZE;
+}
+
+uint32_t FlashRing_GetDropCount(void)
+{
+    return s_ring_drop_count;
+}
 
 W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt)
 {
