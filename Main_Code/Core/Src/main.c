@@ -34,6 +34,7 @@
 #include "mmc5983.h"
 #include "sensor_axis.h"   /* 感測器->body 軸向映射（唯一真相來源，見 sensor_axis.h） */
 #include "telemetry.h"     /* 共用二進制+CRC16 下行遙測封包 */
+#include "sensor_health.h" /* P0-D：感測器失流/卡死/範圍偵測（host 可測純邏輯） */
 #include "lora_e22.h"      /* E22-400T30S 433MHz LoRa 透傳 (UART3) */
 #include "lora_e80.h"      /* E80-900M2213S 920MHz LoRa (SX126x SPI3) */
 #include "spi3_bus.h"      /* SPI3 共用匯流排互斥鎖 (Flash + E80) */
@@ -106,6 +107,12 @@ volatile float g_main_task_cpu_usage = 0.0f;
 FlightState_t current_fsm_state = STATE_INIT;   /* 由 FSM 包裝層自 g_fsm_ctx 鏡射（P0-A） */
 uint32_t flight_start_tick = 0;                 /* 同上；速度歷史 last_vel_z 已收入 FSM_Context_t */
 uint8_t sd_logging_active = 0;
+
+/* P0-D：感測器健康監測（失流/卡死/範圍）。彙整位 SH_BIT_* 供 FSM/遙測/[HEALTH] 行。 */
+static SensorMon_t g_mon_bmi088;
+static SensorMon_t g_mon_adxl375;
+static SensorMon_t g_mon_bmp388;
+volatile uint8_t g_sensor_fault_bits = 0;
 /* 落地時刻 tick（0 = 尚未落地）。SD 全程記錄據此由 100Hz 降為 10Hz，並於逾時後自動關檔 (Item E)。 */
 volatile uint32_t g_touchdown_tick = 0;
 
@@ -1446,6 +1453,13 @@ static void FSM_Update(void)
         }
     }
 
+    /* P0-D：彙整感測器健康位（100Hz；初始化失敗從未餵入 → STALE 自動涵蓋） */
+    uint8_t sens_bits = 0U;
+    if (sensor_mon_status(&g_mon_bmi088,  now) != 0U) sens_bits |= SH_BIT_BMI088;
+    if (sensor_mon_status(&g_mon_adxl375, now) != 0U) sens_bits |= SH_BIT_ADXL375;
+    if (sensor_mon_status(&g_mon_bmp388,  now) != 0U) sens_bits |= SH_BIT_BMP388;
+    g_sensor_fault_bits = sens_bits;
+
     FSM_Input_t in;
     in.now_ms         = now;
     in.h_est          = ekf_state.pos_z;   // 卡爾曼估計高度 (m)
@@ -1456,8 +1470,9 @@ static void FSM_Update(void)
     /* P0-C：健康位全 0 且 EKF_Task 300ms 內有更新才視為 healthy（餓死防護） */
     in.ekf_healthy    = (EKF_GetHealthBits() == 0U &&
                          (now - EKF_GetLastUpdateTick()) <= 300U) ? 1U : 0U;
-    /* P0-D 起接 sensor_health；目前以「BMP388 初始化成功且 pad 基準已建立」閘控 baro 路徑 */
-    in.sensor_bits    = (bmp388_ok && pad_ref_valid) ? 0U : FSM_SB_BARO_FAULT;
+    /* P0-D：baro 路徑閘控 = sensor_health 的 BMP388 位 + pad 基準已建立 */
+    in.sensor_bits    = (((sens_bits & SH_BIT_BMP388) == 0U) && pad_ref_valid)
+                        ? 0U : FSM_SB_BARO_FAULT;
 
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
@@ -2039,7 +2054,10 @@ void StartDefaultTask(void *argument)
 
             // 4. Interleave Barometer readings at 200 Hz
             // This corresponds to index 0 and index 5 of our 10 synchronized samples
-            if ((i == 0 || i == 5) && bmp388_ok) {
+            // P0-D：BMP388 故障（卡死/失流/範圍）時不再餵入 EKF —— 觸發
+            // EKF_HB_BARO_TIMEOUT → FSM 降級鏈，而非讓 EKF 吃陳舊/壞值。
+            if ((i == 0 || i == 5) && bmp388_ok &&
+                (g_sensor_fault_bits & SH_BIT_BMP388) == 0U) {
                 p_sample->has_baro = 1;
                 p_sample->baro_alt = baro_data.altitude;
             } else {
@@ -2088,6 +2106,15 @@ void StartDefaultTask(void *argument)
         float raw_gz         = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
         sensor_imu_to_body(raw_gx, raw_gy, raw_gz, &imu_data.gx, &imu_data.gy, &imu_data.gz);
 
+        /* P0-D：BMI088 健康餵入（accel+gyro raw 簽章；卡死/失流偵測） */
+        sensor_mon_feed(&g_mon_bmi088, HAL_GetTick(),
+                        sensor_sig3(imu_data.accel_x_raw,
+                                    imu_data.accel_y_raw,
+                                    imu_data.accel_z_raw) ^
+                        sensor_sig3(imu_data.gyro_x_raw,
+                                    imu_data.gyro_y_raw,
+                                    imu_data.gyro_z_raw),
+                        1U /* BMI088 無範圍檢查 */);
     }
 
     /* === ADXL375 Ping-Pong 雙緩衝區批次數據提取 (3.2 kHz 中斷在背後默默採樣並填充) === */
@@ -2105,6 +2132,18 @@ void StartDefaultTask(void *argument)
         float raw_adxl_az = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].az;
         sensor_highg_to_body(raw_adxl_ax, raw_adxl_ay, raw_adxl_az,
                              &highg_data.ax, &highg_data.ay, &highg_data.az);
+
+        /* P0-D：ADXL375 健康餵入（±200g 量程，>250g 持續 0.5s 視為範圍失效） */
+        {
+            uint8_t adxl_range_ok = (fabsf(highg_data.ax) <= 250.0f &&
+                                     fabsf(highg_data.ay) <= 250.0f &&
+                                     fabsf(highg_data.az) <= 250.0f) ? 1U : 0U;
+            sensor_mon_feed(&g_mon_adxl375, HAL_GetTick(),
+                            sensor_sig3(highg_data.x_raw,
+                                        highg_data.y_raw,
+                                        highg_data.z_raw),
+                            adxl_range_ok);
+        }
         
         // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_adxl_batches[ready_idx] 共 32 筆資料，即為 3.2 kHz HIL 實時存檔
     }
@@ -2160,8 +2199,19 @@ void StartDefaultTask(void *argument)
         __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
         BMP388_ReadData(&hspi1, &baro_data);
         __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
-        
+
         RATE_TICK_BMP388();   /* 統計 BMP388 實際採樣率 → g_sampling_rate.bmp388.rate_hz */
+
+        /* P0-D：BMP388 健康餵入（氣壓 26–110 kPa、溫度 −40~85°C；
+         * 簽章取整數 Pa —— 卡死的感測器回傳逐位元相同的浮點值） */
+        {
+            uint8_t bmp_range_ok = (baro_data.pressure    >= 26000.0f &&
+                                    baro_data.pressure    <= 110000.0f &&
+                                    baro_data.temperature >= -40.0f &&
+                                    baro_data.temperature <=  85.0f) ? 1U : 0U;
+            sensor_mon_feed(&g_mon_bmp388, HAL_GetTick(),
+                            (int32_t)baro_data.pressure, bmp_range_ok);
+        }
     }
 
     /* === Flash Ring Buffer 寫入：依 FSM 狀態分級寫入速率（改善項目 F） ===
@@ -2257,6 +2307,12 @@ void StartDefaultTask(void *argument)
     /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
     if (tick % 500 == 0) {
         HAL_GPIO_TogglePin(LED_SYS_GPIO_Port, LED_SYS_Pin);
+    }
+
+    /* === P0-D：1Hz 健康診斷行（sens=SH_BIT_BMI088/ADXL375/BMP388、ekf=EKF_HB_*） === */
+    if (tick % 1000 == 0) {
+        printf("[HEALTH] sens=0x%02X ekf=0x%02X\r\n",
+               (unsigned)g_sensor_fault_bits, (unsigned)EKF_GetHealthBits());
     }
 
     /* === 感測器狀態 LED（每 100ms 更新）===

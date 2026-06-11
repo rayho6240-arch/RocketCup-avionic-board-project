@@ -31,6 +31,7 @@ extern uint8_t           adxl375_ok;
 extern uint8_t           mag_ok;
 extern uint8_t           sd_logging_active;
 extern volatile uint8_t  g_fsm_failsafe_fired;  /* P0-B：失效保護計時器強制點火鎖存 */
+extern volatile uint8_t  g_sensor_fault_bits;   /* P0-D：感測器健康彙整位（SH_BIT_*） */
 extern TIM_HandleTypeDef htim4;              /* PWM_Servo（主傘舵機）CH3 */
 
 /* float → int16 飽和轉換，避免大數值 wrap 成錯誤負值 */
@@ -127,6 +128,7 @@ uint16_t Telemetry_Build(uint8_t *out)
     if (sd_logging_active)                                            flags |= TELEM_FLAG_SD_ACTIVE;
     if (GPS_IsStale(2000))                                            flags |= TELEM_FLAG_GPS_STALE;
     if (EKF_GetHealthBits() != 0U)                                    flags |= TELEM_FLAG_EKF_UNHEALTHY;
+    if (g_sensor_fault_bits != 0U)                                    flags |= TELEM_FLAG_SENSOR_FAULT;
     if (g_fsm_failsafe_fired)                                         flags |= TELEM_FLAG_FAILSAFE;
     pkt.flags = flags;
 
