@@ -80,6 +80,10 @@ typedef enum {
 #define FSM_FB_TOUCHDOWN_DELTA_M 2.0f    // 視窗內 baro 變化量門檻
 #define FSM_FB_TOUCHDOWN_ALT_M   30.0f   // 降級落地高度門檻
 
+/* === P0-F：熱啟動驗證鏈參數 === */
+#define FSM_HOTSTART_MAX_TICK_MS    60000U  // 封包飛行 tick 合理上限（防上次飛行殘留資料誤恢復）
+#define FSM_HOTSTART_MAX_ALT_DIFF_M 300.0f  // 封包 baro 與當下 baro 容許差（IWDG 2.05s + 開機期下落餘裕）
+
 /* === 事件（供呼叫端列印 / 記錄；一次 FSM_Step 至多一個事件） === */
 typedef enum {
     FSM_EVT_NONE = 0,
@@ -131,6 +135,28 @@ typedef struct {
     float    fb_td_ref_alt;       // 降級落地判定：2s 視窗基準 baro 高度（P0-C）
     uint32_t fb_td_ref_tick;      // 降級落地判定：視窗起始 tick（0=未初始化）
 } FSM_Context_t;
+
+/* === P0-F：熱啟動決策（純函式，main.c 收集輸入後呼叫） === */
+typedef struct {
+    uint8_t       restore;       // 1 = 恢復飛行狀態；0 = 回 STATE_PAD 完整重校準
+    FlightState_t state;         // 恢復目標狀態（已套用防二次點火政策）
+    uint8_t       drogue_fired;  // 交給 FSM_Init 的點火鎖存
+} FSM_HotStartDecision_t;
+
+/*
+ * 熱啟動驗證鏈（任一失敗 → restore=0 回 PAD）：
+ *   1. pkt_valid：ring 末筆封包 CRC 有效
+ *   2. 封包狀態 ∈ BOOST..DESCENT（正常落地後末筆為 LANDED → 自然回 PAD）
+ *   3. pkt_tick_ms < 60s：防上次飛行殘留的飛行中封包在地面誤恢復
+ *   4. |封包 baro − 當下 baro| < 300m：高度連續性
+ * 重點火政策：pkt_drogue_fired=1 → 恢復目標強制 ≥ STATE_DESCENT（杜絕二次點火）。
+ */
+FSM_HotStartDecision_t FSM_HotStartDecide(uint8_t pkt_valid,
+                                          uint8_t pkt_fsm_state,
+                                          uint32_t pkt_tick_ms,
+                                          float pkt_baro_alt_m,
+                                          float cur_baro_alt_m,
+                                          uint8_t pkt_drogue_fired);
 
 /*
  * 初始化 / 熱啟動進入指定狀態。

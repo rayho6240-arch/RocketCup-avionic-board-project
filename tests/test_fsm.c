@@ -415,6 +415,44 @@ static void test_ekf_unhealthy_fallback(void) {
 }
 
 /* ---------------------------------------------------------------- */
+static void test_hotstart_decide(void) {
+    printf("[8] P0-F：熱啟動驗證鏈（FSM_HotStartDecide）\n");
+    FSM_HotStartDecision_t d;
+
+    /* 封包無效 → PAD */
+    d = FSM_HotStartDecide(0, STATE_COAST, 8000, 250.0f, 240.0f, 0);
+    check("封包 CRC 無效 → PAD", d.restore == 0 && d.state == STATE_PAD);
+
+    /* 上次飛行正常收尾（末筆 LANDED）→ PAD */
+    d = FSM_HotStartDecide(1, STATE_LANDED, 30000, 100.0f, 100.0f, 1);
+    check("末筆 LANDED → PAD（正常地面開機）", d.restore == 0);
+
+    /* 標準空中重啟：COAST 未點火 → 恢復 COAST */
+    d = FSM_HotStartDecide(1, STATE_COAST, 8000, 250.0f, 200.0f, 0);
+    check("COAST 未點火 → 恢復 COAST", d.restore == 1 && d.state == STATE_COAST && d.drogue_fired == 0);
+
+    /* 防二次點火：COAST/APOGEE 已點火 → 一律恢復 DESCENT */
+    d = FSM_HotStartDecide(1, STATE_COAST, 8000, 250.0f, 200.0f, 1);
+    check("COAST 已點火 → 強制 DESCENT", d.restore == 1 && d.state == STATE_DESCENT && d.drogue_fired == 1);
+    d = FSM_HotStartDecide(1, STATE_APOGEE, 9000, 280.0f, 250.0f, 1);
+    check("APOGEE 已點火 → 強制 DESCENT", d.restore == 1 && d.state == STATE_DESCENT);
+    d = FSM_HotStartDecide(1, STATE_DESCENT, 12000, 180.0f, 150.0f, 1);
+    check("DESCENT 已點火 → 維持 DESCENT", d.restore == 1 && d.state == STATE_DESCENT);
+
+    /* 合理性檢查 */
+    d = FSM_HotStartDecide(1, STATE_COAST, 60000, 250.0f, 240.0f, 0);
+    check("tick ≥ 60s → PAD（陳舊資料）", d.restore == 0);
+    d = FSM_HotStartDecide(1, STATE_COAST, 8000, 550.0f, 100.0f, 0);
+    check("高度差 ≥ 300m → PAD（殘留封包）", d.restore == 0);
+    d = FSM_HotStartDecide(1, STATE_COAST, 8000, 100.0f, 550.0f, 0);
+    check("高度差雙向皆檢查", d.restore == 0);
+
+    /* BOOST 未點火 → 恢復 BOOST（燒完/失效計時器照常運作） */
+    d = FSM_HotStartDecide(1, STATE_BOOST, 1200, 60.0f, 30.0f, 0);
+    check("BOOST 未點火 → 恢復 BOOST", d.restore == 1 && d.state == STATE_BOOST);
+}
+
+/* ---------------------------------------------------------------- */
 int main(void) {
     printf("=== test_fsm：飛行狀態機黃金剖面（P0-A 行為保存） ===\n");
     test_nominal_profile();
@@ -424,6 +462,7 @@ int main(void) {
     test_hot_restart_init();
     test_failsafe_and_baro_crosscheck();
     test_ekf_unhealthy_fallback();
+    test_hotstart_decide();
     printf("----------------------------------------\n");
     printf("%s：%d/%d 通過\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

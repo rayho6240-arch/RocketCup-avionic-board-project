@@ -41,6 +41,7 @@ extern "C" {
 #define TELEM_FLAG_EKF_UNHEALTHY  0x10U  /* EKF 健康位非 0（P0-C；FSM 已切 raw-baro 降級鏈） */
 #define TELEM_FLAG_SENSOR_FAULT   0x20U  /* 任一感測器失流/卡死/範圍失效（P0-D，詳見 [HEALTH] 行） */
 #define TELEM_FLAG_FAILSAFE       0x40U  /* 失效保護計時器強制點火（P0-B；地面站需特別標示） */
+#define TELEM_FLAG_HOTSTART       0x80U  /* 空中斷電熱啟動恢復成功（P0-F） */
 
 /* 下行遙測封包（packed，固定長度）。欄位順序即為地面端解碼契約。 */
 typedef struct __attribute__((packed)) {

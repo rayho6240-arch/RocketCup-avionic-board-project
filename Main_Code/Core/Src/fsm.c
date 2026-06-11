@@ -8,6 +8,41 @@
 #include <math.h>
 #include <string.h>
 
+FSM_HotStartDecision_t FSM_HotStartDecide(uint8_t pkt_valid,
+                                          uint8_t pkt_fsm_state,
+                                          uint32_t pkt_tick_ms,
+                                          float pkt_baro_alt_m,
+                                          float cur_baro_alt_m,
+                                          uint8_t pkt_drogue_fired)
+{
+    FSM_HotStartDecision_t d;
+    d.restore      = 0U;
+    d.state        = STATE_PAD;
+    d.drogue_fired = 0U;
+
+    if (!pkt_valid) {
+        return d;
+    }
+    if (pkt_fsm_state < (uint8_t)STATE_BOOST || pkt_fsm_state > (uint8_t)STATE_DESCENT) {
+        return d;   /* 正常地面開機（含上次飛行以 LANDED 收尾） */
+    }
+    if (pkt_tick_ms >= FSM_HOTSTART_MAX_TICK_MS) {
+        return d;   /* 飛行 tick 不合理：陳舊/損毀資料 */
+    }
+    if (fabsf(pkt_baro_alt_m - cur_baro_alt_m) >= FSM_HOTSTART_MAX_ALT_DIFF_M) {
+        return d;   /* 高度不連續：多半是上次飛行殘留封包在地面被讀到 */
+    }
+
+    d.restore      = 1U;
+    d.drogue_fired = (pkt_drogue_fired != 0U) ? 1U : 0U;
+    d.state        = (FlightState_t)pkt_fsm_state;
+    /* 防二次點火：副傘已點火 → 不得恢復至會再點火的 COAST/APOGEE 之前 */
+    if (d.drogue_fired && d.state < STATE_DESCENT) {
+        d.state = STATE_DESCENT;
+    }
+    return d;
+}
+
 void FSM_Init(FSM_Context_t *ctx, FlightState_t s0, uint32_t now_ms,
               uint32_t flight_start_ms, uint8_t drogue_already_fired)
 {

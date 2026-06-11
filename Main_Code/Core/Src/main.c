@@ -1433,6 +1433,7 @@ int _write(int file, char *ptr, int len)
  * 硬體動作（點火/舵機/蜂鳴器）嚴格先於 printf：避免 UART 阻塞（~9ms/行）延遲開傘。 */
 static FSM_Context_t g_fsm_ctx;
 volatile uint8_t g_fsm_failsafe_fired = 0;   /* 失效保護點火鎖存（telemetry TELEM_FLAG_FAILSAFE 讀取） */
+volatile uint8_t g_hotstart_restored  = 0;   /* P0-F：熱啟動恢復鎖存（telemetry TELEM_FLAG_HOTSTART） */
 
 static void FSM_Update(void)
 {
@@ -1882,25 +1883,53 @@ void StartDefaultTask(void *argument)
    * 掃描寫入頭 + 預擦 10 個 Sector（~10×200ms = 2s），期間由函式內部餵狗 */
   FlashRing_Init();
  
-  /* === 空中熱啟動（Hot-Restart）恢復偵測 === */
+  /* === P0-F：空中熱啟動（Hot-Restart）安全恢復 ===
+   * 驗證鏈（FSM_HotStartDecide，host 已測）全過才恢復飛行狀態，任一失敗回
+   * STATE_PAD 完整重校準：封包 CRC、狀態 ∈ BOOST..DESCENT、tick<60s（防上次
+   * 飛行殘留資料）、|封包 baro − 當下 baro|<300m（高度連續性）。
+   * 重點火政策：封包 flags bit0（寫入當下 PD13 已導通）→ 恢復至 DESCENT 並
+   * 將 drogue_fired 鎖存入 FSM_Init —— 杜絕空中斷電重啟後二次點火。
+   * EKF 校準不再裸跳設 1：EKF_Init 已自 Flash SysFlags（CRC+magic）還原校準；
+   * 若 SysFlags 損毀則 EKF 將以 unhealthy 進入 P0-C raw-baro 降級鏈，開傘不受阻。 */
   FlashRingPacket_t last_pkt;
-  if (FlashRing_GetLastPacket(&last_pkt) == W25QXX_OK) {
-      if (last_pkt.fsm_state >= STATE_BOOST && last_pkt.fsm_state <= STATE_DESCENT) {
-          printf("[FSM] ⚠️ WARNING: 檢測到空中斷電重啟！正在嘗試恢復飛行狀態...\r\n");
-          printf("[FSM] 恢復前一狀態: %d, 飛行相對 Tick: %lu ms\r\n", last_pkt.fsm_state, last_pkt.tick_ms);
-          
-          EKF_calibrated = 1;     // 強制跳過 EKF 靜態校準
-          EKF_in_flight = 1;      // 強制將 EKF 設為飛行狀態
-          current_fsm_state = (FlightState_t)last_pkt.fsm_state;
-          flight_start_tick = HAL_GetTick() - last_pkt.tick_ms; // 恢復起飛基準 Tick
-          FSM_Init(&g_fsm_ctx, current_fsm_state, HAL_GetTick(), flight_start_tick, 0U);
-      } else {
-          current_fsm_state = STATE_PAD; // 正常地面起飛
-          FSM_Init(&g_fsm_ctx, STATE_PAD, HAL_GetTick(), 0U, 0U);
-      }
+  uint8_t pkt_valid = (FlashRing_GetLastPacket(&last_pkt) == W25QXX_OK) ? 1U : 0U;
+
+  /* 取當下首筆 baro 供高度連續性檢查（與主迴圈相同的 TIM3 遮蔽保護） */
+  __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+  BMP388_ReadData(&hspi1, &baro_data);
+  __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
+
+  FSM_HotStartDecision_t hs = FSM_HotStartDecide(
+      pkt_valid,
+      pkt_valid ? last_pkt.fsm_state : 0U,
+      pkt_valid ? last_pkt.tick_ms : 0U,
+      pkt_valid ? ((float)last_pkt.baro_alt_cm / 100.0f) : 0.0f,
+      baro_data.altitude,
+      (pkt_valid && (last_pkt.flags & 0x01U)) ? 1U : 0U);
+
+  if (hs.restore) {
+      g_hotstart_restored = 1U;   /* 遙測 TELEM_FLAG_HOTSTART（地面站需特別標示） */
+      EKF_in_flight = 1;          /* EKF 跳過發射台 ZUPT / launch 偵測 */
+      current_fsm_state = hs.state;
+      flight_start_tick = HAL_GetTick() - last_pkt.tick_ms;  /* 起飛基準（unsigned 迴繞安全） */
+      FSM_Init(&g_fsm_ctx, hs.state, HAL_GetTick(), flight_start_tick, hs.drogue_fired);
+
+      /* 注入空中 EKF 狀態（封包 EKF 高度/垂直速度/四元數）。
+       * 此刻 EKF_Task 阻塞於空佇列（主迴圈尚未饋入 buffer），寫入安全。 */
+      float hs_q[4] = { last_pkt.ekf_q0, last_pkt.ekf_q1, last_pkt.ekf_q2, last_pkt.ekf_q3 };
+      EKF_HotRestartRestore((float)last_pkt.ekf_pos_z_cm / 100.0f,
+                            (float)last_pkt.ekf_vel_z_cms / 100.0f, hs_q);
+
+      printf("[FSM] ⚠️ HOT-RESTART：恢復狀態 %d（drogue_fired=%u），飛行 tick %lu ms\r\n",
+             (int)hs.state, hs.drogue_fired, (unsigned long)last_pkt.tick_ms);
   } else {
-      current_fsm_state = STATE_PAD; // 正常地面起飛
+      current_fsm_state = STATE_PAD; // 正常地面起飛（或驗證未過回 PAD 重校準）
       FSM_Init(&g_fsm_ctx, STATE_PAD, HAL_GetTick(), 0U, 0U);
+      if (pkt_valid &&
+          last_pkt.fsm_state >= STATE_BOOST && last_pkt.fsm_state <= STATE_DESCENT) {
+          printf("[FSM] 偵測到飛行中封包但熱啟動驗證未過（tick=%lu ms），回 PAD 重校準。\r\n",
+                 (unsigned long)last_pkt.tick_ms);
+      }
   }
 
   /* FlashRing_Init 阻塞約 2s，BMP388（主迴圈讀取）在此期間無法累積計數。
