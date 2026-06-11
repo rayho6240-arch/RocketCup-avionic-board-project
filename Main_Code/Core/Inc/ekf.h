@@ -77,6 +77,13 @@ void EKF_SubmitMag(float mx, float my, float mz);
 float EKF_GetCPUUsage(void);
 EKF_State_t EKF_GetState(void);
 
+/* P0-C：EKF 防護（ekf_guard.h）健康介面。
+ * EKF_GetHealthBits()==0 且 (now − EKF_GetLastUpdateTick()) ≤ 300ms 才視為 healthy；
+ * unhealthy 時 FSM 切換 raw-baro 降級開傘鏈（fsm.c），遙測置 TELEM_FLAG_EKF_UNHEALTHY。 */
+#include "ekf_guard.h"
+uint8_t  EKF_GetHealthBits(void);
+uint32_t EKF_GetLastUpdateTick(void);
+
 void EKF_SaveCalibrationToFlash(void);
 void EKF_LoadCalibrationFromFlash(void);
 void EKF_HotRestartRestore(float last_altitude, float est_vel_z, const float *last_q);

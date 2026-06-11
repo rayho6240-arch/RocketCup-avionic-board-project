@@ -323,6 +323,98 @@ static void test_failsafe_and_baro_crosscheck(void) {
 }
 
 /* ---------------------------------------------------------------- */
+static void test_ekf_unhealthy_fallback(void) {
+    printf("[7] P0-C：EKF unhealthy 降級鏈（raw-baro）\n");
+    Sim_t s;
+
+    /* 7a. EKF unhealthy 時，發散的 h_est/v_est 不得觸發 EKF 頂點路徑：
+     * v=-5（健康時會走速度過零）、h 自峰值大跌（健康時會走高度回落），
+     * 但 baro 持平 → 不得點火。 */
+    sim_init(&s, STATE_COAST, 10000, 6000, 0);
+    s.in.ekf_healthy = 0;
+    s.in.h_est = 300.0f;
+    sim_step(&s);                       /* 建立 max_altitude=300 */
+    s.in.v_est = -5.0f;                 /* 假裝 EKF 報告下墜 */
+    s.in.h_est = 100.0f;                /* 假裝高度自峰值大跌 200m */
+    s.in.baro_alt_rel = 150.0f;         /* baro 持平：真實仍在上升段 */
+    sim_run_until(&s, 14000);
+    check("unhealthy：發散 EKF 值不觸發點火", s.fire_n == 0 && s.ctx.state == STATE_COAST);
+
+    /* baro 開始下降 → 趨勢路徑點火（降級鏈接手） */
+    {
+        uint32_t t_fall = s.now;        /* 14000 */
+        while (s.now < 16000 && s.fire_n == 0) {
+            s.in.baro_alt_rel = 150.0f - 25.0f * (float)(s.now - t_fall) / 1000.0f;
+            sim_step(&s);
+        }
+        check("unhealthy：baro 趨勢路徑照常點火", s.fire_n == 1 && s.t_apogee != 0);
+    }
+
+    /* 7b. 全程降級飛行（EKF 死亡、ekf_calibrated=0）：僅靠 a_z + baro 完成全序列 */
+    sim_init(&s, STATE_PAD, 0, 0, 0);
+    s.in.ekf_healthy    = 0;
+    s.in.ekf_calibrated = 0;            /* EKF 死亡 → 永遠不會校準完成 */
+    s.in.h_est = 0.0f; s.in.v_est = 0.0f;
+
+    /* PAD 1s 靜置（確認降級下不誤觸發） */
+    s.in.a_z_g = 1.0f; s.in.baro_alt_rel = 0.0f;
+    sim_run_until(&s, 1000);
+    check("降級：PAD 靜置不誤起飛", s.ctx.state == STATE_PAD);
+
+    /* 起飛（a_z 路徑，無視 ekf_calibrated） */
+    s.in.a_z_g = 8.0f;
+    sim_step(&s);
+    check("降級：a_z 起飛（不需 EKF 校準）", s.ctx.state == STATE_BOOST && s.t_liftoff == 1000);
+
+    /* BOOST：燒至 t=2000 → a_z=0.3；燒完於 1000+1500 後第一步 = 2510 */
+    while (s.now < 2000) { s.in.baro_alt_rel = 290.0f * (float)(s.now - 1000) / 5000.0f; sim_step(&s); }
+    s.in.a_z_g = 0.3f;
+    while (s.ctx.state == STATE_BOOST && s.now < 5000) {
+        s.in.baro_alt_rel = 290.0f * (float)(s.now - 1000) / 5000.0f;
+        sim_step(&s);
+    }
+    check("降級：a_z 燒完轉移 (t=2510)", s.t_burnout == 2510 && s.ctx.state == STATE_COAST);
+
+    /* COAST：baro 升至 t=6000 峰值 290，後以 25 m/s 下降 → 趨勢點火（峰值後 ~640ms） */
+    while (s.ctx.state == STATE_COAST && s.now < 9000) {
+        s.in.baro_alt_rel = (s.now <= 6000)
+            ? 290.0f * (float)(s.now - 1000) / 5000.0f
+            : 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
+        sim_step(&s);
+    }
+    check("降級：baro 趨勢點火（峰值後 <1s）", s.fire_n == 1 &&
+          s.t_apogee > 6000 && s.t_apogee < 7000);
+
+    /* APOGEE 2s → DESCENT；主傘於 baro_rel ≤ 200（t≈9600） */
+    while (s.ctx.state != STATE_MAIN_DEPLOY && s.now < 12000) {
+        s.in.baro_alt_rel = 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
+        sim_step(&s);
+    }
+    check("降級：主傘於 baro 200m 部署 (t≈9600)", s.main_n == 1 && near_ms(s.t_main, 9600, 50));
+
+    /* MAIN_DEPLOY 3s → LANDED；持續下降中不誤判落地；t=17000 起 baro 凍結 10m
+     * → 2s 視窗穩定 → 落地 */
+    while (s.now < 17000) {
+        float b = 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
+        s.in.baro_alt_rel = (b > 10.0f) ? b : 10.0f;
+        sim_step(&s);
+    }
+    check("降級：下降中不誤判落地", s.t_touchdown == 0 && s.ctx.state == STATE_LANDED);
+    s.in.baro_alt_rel = 10.0f;
+    sim_run_until(&s, 22000);
+    check("降級：baro 穩定 2s 視窗後落地", s.t_touchdown != 0 && s.t_touchdown <= 21000 && s.buzzer_n == 1);
+
+    /* 7c. unhealthy 時 h_est 發散不得誤觸起飛 */
+    sim_init(&s, STATE_PAD, 0, 0, 0);
+    s.in.ekf_healthy = 0;
+    s.in.a_z_g = 1.0f;
+    s.in.h_est = 50.0f;                 /* 發散：健康時會誤判起飛 */
+    s.in.baro_alt_rel = 0.0f;
+    sim_run_until(&s, 5000);
+    check("unhealthy：發散 h_est 不誤起飛", s.ctx.state == STATE_PAD);
+}
+
+/* ---------------------------------------------------------------- */
 int main(void) {
     printf("=== test_fsm：飛行狀態機黃金剖面（P0-A 行為保存） ===\n");
     test_nominal_profile();
@@ -331,6 +423,7 @@ int main(void) {
     test_tick_overflow();
     test_hot_restart_init();
     test_failsafe_and_baro_crosscheck();
+    test_ekf_unhealthy_fallback();
     printf("----------------------------------------\n");
     printf("%s：%d/%d 通過\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

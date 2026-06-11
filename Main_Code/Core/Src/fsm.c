@@ -51,20 +51,28 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
     }
 
     switch (ctx->state) {
-        case STATE_PAD:
-            // 等待靜態校準完成
-            if (in->ekf_calibrated) {
+        case STATE_PAD: {
+            uint8_t liftoff = 0U;
+            if (in->ekf_calibrated && in->ekf_healthy) {
                 // 起飛觸發條件：高G加速度 > 3.0g 或高度 > 10.0m
                 // 或 baro 相對高度 > 20.0m（P0-B 第三冗餘：ADXL 與 EKF 雙失效仍可偵測起飛）
-                if (a_z > FSM_LIFTOFF_ACCEL_G || h_est > FSM_LIFTOFF_ALT_M ||
-                    (baro_ok && in->baro_alt_rel > FSM_LIFTOFF_BARO_ALT_M)) {
-                    ctx->state            = STATE_BOOST;
-                    ctx->flight_start_ms  = now;
-                    ctx->state_entered_ms = now;
-                    act.event = FSM_EVT_LIFTOFF;
-                }
+                liftoff = (a_z > FSM_LIFTOFF_ACCEL_G || h_est > FSM_LIFTOFF_ALT_M ||
+                           (baro_ok && in->baro_alt_rel > FSM_LIFTOFF_BARO_ALT_M)) ? 1U : 0U;
+            } else if (!in->ekf_healthy) {
+                /* P0-C 降級：EKF unhealthy（含 EKF_Task 死亡 → 永遠不會校準完成）時，
+                 * 以不依賴 EKF 的雙路徑偵測起飛 —— 否則卡 PAD 連失效保護都不會武裝。 */
+                liftoff = (a_z > FSM_LIFTOFF_ACCEL_G ||
+                           (baro_ok && in->baro_alt_rel > FSM_LIFTOFF_BARO_ALT_M)) ? 1U : 0U;
+            }
+            /* else：EKF 健康但未校準 → 維持原行為等待校準完成（靜置僅需 3s） */
+            if (liftoff) {
+                ctx->state            = STATE_BOOST;
+                ctx->flight_start_ms  = now;
+                ctx->state_entered_ms = now;
+                act.event = FSM_EVT_LIFTOFF;
             }
             break;
+        }
 
         case STATE_BOOST:
             // 馬達燒完判定：加速度 < 0.5g 且 flight time > 1.5 秒
@@ -110,11 +118,13 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
             // 2. 備用安全判定：垂直速度過零 (v_est < -0.2 m/s) 或是高度從峰值下降超過 5.0m
             // 3. P0-B：baro 原始趨勢交叉檢查（上方 baro_apogee）
             // 同時必須滿足起飛時間鎖（起飛後累計大於 3.0 秒）
+            // P0-C：EKF unhealthy 時停用 1/2（發散的 h_est/v_est 會誤點火），僅留 3 + 失效計時器
             uint8_t apogee_condition = 0;
-            if (v_est > 0.0f && t_to_apogee <= DROGUE_LEAD_TIME_S) {
+            if (in->ekf_healthy && v_est > 0.0f && t_to_apogee <= DROGUE_LEAD_TIME_S) {
                 apogee_condition = 1;
-            } else if (v_est < -FSM_APOGEE_VFALL_MPS ||
-                       (ctx->max_altitude - h_est) > FSM_APOGEE_ALT_DROP_M) {
+            } else if (in->ekf_healthy &&
+                       (v_est < -FSM_APOGEE_VFALL_MPS ||
+                        (ctx->max_altitude - h_est) > FSM_APOGEE_ALT_DROP_M)) {
                 apogee_condition = 1;
             } else if (baro_apogee) {
                 apogee_condition = 1;
@@ -148,12 +158,19 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
             break;
 
         case STATE_DESCENT: {
-            // 動態主傘部署高度計算：h_trigger = h_target + |v_fall| * t_delay
-            float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
-            float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
+            uint8_t main_trigger = 0U;
+            if (in->ekf_healthy) {
+                // 動態主傘部署高度計算：h_trigger = h_target + |v_fall| * t_delay
+                float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
+                float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
+                main_trigger = (h_est <= h_trigger_main) ? 1U : 0U;
+            } else if (baro_ok) {
+                /* P0-C 降級：baro 相對高度 ≤ 200m（150m 目標 + 下降速度餘裕的固定值） */
+                main_trigger = (in->baro_alt_rel <= FSM_FB_MAIN_ALT_M) ? 1U : 0U;
+            }
 
             // 觸發條件：高度低於觸發高度，或是飛行總時間看門狗超時 (25秒)
-            if (h_est <= h_trigger_main ||
+            if (main_trigger ||
                 (now - ctx->flight_start_ms) > FSM_MAIN_WATCHDOG_MS) {
                 ctx->state            = STATE_MAIN_DEPLOY;
                 ctx->state_entered_ms = now;
@@ -173,12 +190,29 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
             break;
 
         case STATE_LANDED:
-            // 落地判定：下墜速度趨近零，且高度小於 20m（僅觸發一次）
-            if (!ctx->touchdown_latched &&
-                fabsf(v_est) < FSM_TOUCHDOWN_V_MPS && h_est < FSM_TOUCHDOWN_ALT_M) {
-                ctx->touchdown_latched = 1U;
-                act.start_buzzer       = 1U;   // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
-                act.event              = FSM_EVT_TOUCHDOWN;
+            if (!ctx->touchdown_latched) {
+                uint8_t touchdown = 0U;
+                if (in->ekf_healthy) {
+                    // 落地判定：下墜速度趨近零，且高度小於 20m（僅觸發一次）
+                    touchdown = (fabsf(v_est) < FSM_TOUCHDOWN_V_MPS &&
+                                 h_est < FSM_TOUCHDOWN_ALT_M) ? 1U : 0U;
+                } else if (baro_ok) {
+                    /* P0-C 降級：2s 視窗內 baro 變化 < 2m 且高度 < 30m */
+                    if (ctx->fb_td_ref_tick == 0U) {
+                        ctx->fb_td_ref_alt  = in->baro_alt_rel;
+                        ctx->fb_td_ref_tick = now;
+                    } else if ((now - ctx->fb_td_ref_tick) >= FSM_FB_TOUCHDOWN_WIN_MS) {
+                        touchdown = (fabsf(in->baro_alt_rel - ctx->fb_td_ref_alt) < FSM_FB_TOUCHDOWN_DELTA_M &&
+                                     in->baro_alt_rel < FSM_FB_TOUCHDOWN_ALT_M) ? 1U : 0U;
+                        ctx->fb_td_ref_alt  = in->baro_alt_rel;
+                        ctx->fb_td_ref_tick = now;
+                    }
+                }
+                if (touchdown) {
+                    ctx->touchdown_latched = 1U;
+                    act.start_buzzer       = 1U;   // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
+                    act.event              = FSM_EVT_TOUCHDOWN;
+                }
             }
             break;
 

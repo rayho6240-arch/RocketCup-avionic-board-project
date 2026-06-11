@@ -38,6 +38,7 @@ extern "C" {
 #define TELEM_FLAG_MAIN_DEPLOYED  0x02U  /* 主傘舵機已轉至釋放角度 */
 #define TELEM_FLAG_SD_ACTIVE      0x04U  /* SD 卡正在記錄 */
 #define TELEM_FLAG_GPS_STALE      0x08U  /* GPS 定位逾時 (>2s 無有效 fix) */
+#define TELEM_FLAG_EKF_UNHEALTHY  0x10U  /* EKF 健康位非 0（P0-C；FSM 已切 raw-baro 降級鏈） */
 #define TELEM_FLAG_FAILSAFE       0x40U  /* 失效保護計時器強制點火（P0-B；地面站需特別標示） */
 
 /* 下行遙測封包（packed，固定長度）。欄位順序即為地面端解碼契約。 */

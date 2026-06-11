@@ -1453,7 +1453,9 @@ static void FSM_Update(void)
     in.a_z_g          = highg_data.az;     // 高 G 垂直加速度 (g)
     in.baro_alt_rel   = pad_ref_valid ? (baro_data.altitude - pad_ref) : 0.0f;
     in.ekf_calibrated = EKF_calibrated;
-    in.ekf_healthy    = 1U;                // P0-C 起接 EKF_GetHealthBits()
+    /* P0-C：健康位全 0 且 EKF_Task 300ms 內有更新才視為 healthy（餓死防護） */
+    in.ekf_healthy    = (EKF_GetHealthBits() == 0U &&
+                         (now - EKF_GetLastUpdateTick()) <= 300U) ? 1U : 0U;
     /* P0-D 起接 sensor_health；目前以「BMP388 初始化成功且 pad 基準已建立」閘控 baro 路徑 */
     in.sensor_bits    = (bmp388_ok && pad_ref_valid) ? 0U : FSM_SB_BARO_FAULT;
 

@@ -69,6 +69,17 @@ typedef enum {
 /* sensor_bits 輸入位元契約（P0-D 起由 sensor_health 餵入；P0-B 起 FSM 即依此閘控 baro 路徑） */
 #define FSM_SB_BARO_FAULT        0x01U   // baro 失效/不可信 → 停用 baro 交叉檢查與 baro 起飛冗餘
 
+/* === P0-C：EKF unhealthy 時的 raw-baro 降級開傘鏈參數 ===
+ * ekf_healthy=0（EKF_GetHealthBits()!=0 或 EKF_Task >300ms 無更新）時：
+ *   起飛   = a_z 或 baro 冗餘（h_est 路徑停用）
+ *   頂點   = baro 趨勢規則（P0-B；EKF 三路徑停用，防發散值誤點火）
+ *   主傘   = baro 相對高度 ≤ 200m 或既有 25s 看門狗
+ *   落地   = 2s 視窗內 |Δbaro| < 2m 且 baro < 30m */
+#define FSM_FB_MAIN_ALT_M        200.0f  // 降級主傘高度（150m 目標 + 副傘 ~20m/s × 2.5s 餘裕，無速度項取固定值）
+#define FSM_FB_TOUCHDOWN_WIN_MS  2000U   // 降級落地判定視窗
+#define FSM_FB_TOUCHDOWN_DELTA_M 2.0f    // 視窗內 baro 變化量門檻
+#define FSM_FB_TOUCHDOWN_ALT_M   30.0f   // 降級落地高度門檻
+
 /* === 事件（供呼叫端列印 / 記錄；一次 FSM_Step 至多一個事件） === */
 typedef enum {
     FSM_EVT_NONE = 0,
@@ -117,6 +128,8 @@ typedef struct {
     float    max_alt_baro;        // COAST 期 baro 原始相對高度滾動峰值（P0-B 交叉檢查）
     uint8_t  consec_baro_drop;    // baro 自峰值回落連續週期計數（P0-B）
     uint8_t  failsafe_fired;      // 失效保護計時器已觸發（遙測 TELEM_FLAG_FAILSAFE）
+    float    fb_td_ref_alt;       // 降級落地判定：2s 視窗基準 baro 高度（P0-C）
+    uint32_t fb_td_ref_tick;      // 降級落地判定：視窗起始 tick（0=未初始化）
 } FSM_Context_t;
 
 /*

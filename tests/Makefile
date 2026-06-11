@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../Main_Code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm
+BINS := test_sensor_axis test_fsm test_ekf_guard
 
 .PHONY: run clean
 
@@ -20,6 +20,9 @@ test_sensor_axis: test_sensor_axis.c ../Main_Code/Core/Inc/sensor_axis.h ../Main
 
 test_fsm: test_fsm.c ../Main_Code/Core/Src/fsm.c ../Main_Code/Core/Inc/fsm.h
 	$(CC) $(CFLAGS) -o $@ test_fsm.c ../Main_Code/Core/Src/fsm.c $(LDLIBS)
+
+test_ekf_guard: test_ekf_guard.c ../Main_Code/Core/Inc/ekf_guard.h
+	$(CC) $(CFLAGS) -o $@ test_ekf_guard.c $(LDLIBS)
 
 clean:
 	rm -f $(BINS)

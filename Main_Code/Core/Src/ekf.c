@@ -6,6 +6,7 @@
 #include "w25qxx.h"
 #include "mmc5983.h"
 #include "attitude_math.h"   /* TRIAD 與四元數工具（與 host 測試共用同一份） */
+#include "ekf_guard.h"       /* P0-C：創新值閘控 / 協方差夾限 / 狀態界限 / NaN 掃描 */
 
 // -------------------------------------------------------------------------
 // Global EKF variables residing in CCM RAM
@@ -79,6 +80,15 @@ static const float EARTH_RADIUS_M = 6378137.0f;            // WGS84 semi-major a
 static const float DEG2RAD = 0.017453292519943295f;        // pi / 180
 
 static volatile float g_ekf_cpu_usage CCMRAM = 0.0f;
+
+// --- P0-C: EKF guard (ekf_guard.h) bookkeeping ---
+static volatile uint8_t  EKF_health_bits CCMRAM = 0;          // EKF_HB_*（0 = 全健康）
+static uint32_t EKF_baro_reject_streak CCMRAM = 0;            // baro 創新值連續拒收計數
+static uint32_t EKF_last_baro_accept_tick CCMRAM = 0;         // 最後一筆被接受的 baro tick
+static float    EKF_last_baro_accepted_rel CCMRAM = 0.0f;     // 最後被接受的 baro 相對高度（NaN 重建用）
+static uint32_t EKF_last_oob_tick CCMRAM = 0;                 // 最後一次狀態夾限 tick（0=從未）
+static uint32_t EKF_last_nan_tick CCMRAM = 0;                 // 最後一次 NaN 重建 tick（0=從未）
+static volatile uint32_t EKF_last_update_tick CCMRAM = 0;     // EKF_Task 最後完成一個 buffer 的 tick
 
 // -------------------------------------------------------------------------
 // FreeRTOS Task and Queue definitions mapped to CCM RAM
@@ -387,6 +397,10 @@ void EKF_Predict(float ax, float ay, float az, float dt) {
         EKF_P[i][i] += Q_pos;       // Add process noise to position diagonal
         EKF_P[i+3][i+3] += Q_vel;   // Add process noise to velocity diagonal
     }
+
+    /* P0-C：協方差對角夾限 —— 防 baro 長時間中斷時 P 無界增長，
+     * 量測恢復瞬間 Kalman 增益爆炸把狀態拉飛。 */
+    ekf_guard_clamp_P(EKF_P);
 }
 
 // Group-delay compensated measurement update using the Analytical Joseph Form
@@ -397,6 +411,24 @@ void EKF_UpdateBaroDelayed(float baro_alt, float z_pred) {
     // 2. Innovation Covariance S = H * P * H^T + R = P[2][2] + R_baro
     float S = EKF_P[2][2] + R_baro;
     if (S < 1e-6f) return; // Prevent division by zero
+
+    /* P0-C：創新值閘控 |y| > max(5σ, 25m) 拒收 —— 單筆 ±10km 壞值不再直接
+     * 餵進濾波器。連續拒收 ≥200 次（@200Hz ≈1s）視為「估計已發散或 baro 已壞」，
+     * 置 EKF_HB_BARO_DIVERGE 健康位（FSM 據此切 raw-baro 降級開傘鏈），
+     * 不強行吞入壞值。任一筆被接受即清除位與計數。 */
+    if (!ekf_guard_baro_accept(y, S)) {
+        if (EKF_baro_reject_streak < 0xFFFFFFFFU) {
+            EKF_baro_reject_streak++;
+        }
+        if (EKF_baro_reject_streak >= EKF_GUARD_BARO_REJECT_N) {
+            EKF_health_bits |= EKF_HB_BARO_DIVERGE;
+        }
+        return;
+    }
+    EKF_baro_reject_streak = 0;
+    EKF_health_bits &= (uint8_t)~EKF_HB_BARO_DIVERGE;
+    EKF_last_baro_accept_tick  = HAL_GetTick();
+    EKF_last_baro_accepted_rel = baro_alt;
 
     float invS = 1.0f / S;
 
@@ -543,6 +575,17 @@ EKF_State_t EKF_GetState(void) {
     memcpy(state.accel_bias, EKF_accel_bias, sizeof(state.accel_bias));
     taskEXIT_CRITICAL();
     return state;
+}
+
+/* P0-C：健康位快照（單 byte volatile，ARM 上原子讀，無需臨界區）。0 = 全健康。 */
+uint8_t EKF_GetHealthBits(void) {
+    return EKF_health_bits;
+}
+
+/* P0-C：EKF_Task 最後完成 buffer 的 tick。FSM 端以 (now − 此值) > 300ms
+ * 判定 EKF_Task 餓死/queue 斷流 —— 光看健康位不夠，EKF 死了就不會再更新位。 */
+uint32_t EKF_GetLastUpdateTick(void) {
+    return EKF_last_update_tick;
 }
 
 // Helper function to format floats safely using fast integer arithmetic
@@ -791,6 +834,58 @@ void EKF_Task(void *argument) {
                 } else {
                     EKF_rest_counter = 0;
                 }
+            }
+
+            /* === P0-C：每 buffer（10Hz）守護掃描 === */
+            {
+                uint32_t guard_now = HAL_GetTick();
+
+                /* NaN/Inf → 全重建：NaN 會在一個乘加內污染整個濾波器，夾限無效，
+                 * 必須重建 —— P 回初值、速度清零、高度拍至最後被接受的 baro、q 回 identity
+                 * （Mahony 會自行重新收斂）。 */
+                if (ekf_guard_scan_nan(EKF_x, EKF_P, EKF_q)) {
+                    taskENTER_CRITICAL();
+                    memset(EKF_x, 0, sizeof(EKF_x));
+                    EKF_x[2] = EKF_last_baro_accepted_rel;
+                    memset(EKF_P, 0, sizeof(EKF_P));
+                    for (int gi = 0; gi < 3; gi++) {
+                        EKF_P[gi][gi]     = 1.0f;   /* 與 EKF_Init 相同的初始不確定度 */
+                        EKF_P[gi+3][gi+3] = 2.0f;
+                    }
+                    EKF_q[0] = 1.0f; EKF_q[1] = 0.0f; EKF_q[2] = 0.0f; EKF_q[3] = 0.0f;
+                    taskEXIT_CRITICAL();
+                    EKF_last_nan_tick = guard_now;
+                    printf("[EKF] ⚠️ NaN/Inf detected — filter rebuilt (alt snapped to last baro %.1f m)\r\n",
+                           EKF_last_baro_accepted_rel);
+                }
+                if (EKF_last_nan_tick != 0U &&
+                    (guard_now - EKF_last_nan_tick) < EKF_GUARD_NAN_STICKY_MS) {
+                    EKF_health_bits |= EKF_HB_NAN;
+                } else {
+                    EKF_health_bits &= (uint8_t)~EKF_HB_NAN;
+                }
+
+                /* 狀態理智界限：越界即夾限並置位；回界 1s 後解除。 */
+                if (ekf_guard_clamp_state(EKF_x)) {
+                    EKF_last_oob_tick = guard_now;
+                }
+                if (EKF_last_oob_tick != 0U &&
+                    (guard_now - EKF_last_oob_tick) < EKF_GUARD_OOB_CLEAR_MS) {
+                    EKF_health_bits |= EKF_HB_STATE_OOB;
+                } else {
+                    EKF_health_bits &= (uint8_t)~EKF_HB_STATE_OOB;
+                }
+
+                /* baro 接受逾時（校準完成後才有意義；涵蓋 baro 斷流與持續拒收前期） */
+                if (EKF_calibrated &&
+                    (guard_now - EKF_last_baro_accept_tick) > EKF_GUARD_BARO_TIMEOUT_MS) {
+                    EKF_health_bits |= EKF_HB_BARO_TIMEOUT;
+                } else {
+                    EKF_health_bits &= (uint8_t)~EKF_HB_BARO_TIMEOUT;
+                }
+
+                /* FSM 端以本 tick 判斷 EKF_Task 是否餓死（>300ms 視同 unhealthy） */
+                EKF_last_update_tick = guard_now;
             }
 
             // --- Pending GPS horizontal-position update (applied once per buffer) ---

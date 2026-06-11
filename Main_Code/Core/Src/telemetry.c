@@ -126,6 +126,7 @@ uint16_t Telemetry_Build(uint8_t *out)
     if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000)         flags |= TELEM_FLAG_MAIN_DEPLOYED;
     if (sd_logging_active)                                            flags |= TELEM_FLAG_SD_ACTIVE;
     if (GPS_IsStale(2000))                                            flags |= TELEM_FLAG_GPS_STALE;
+    if (EKF_GetHealthBits() != 0U)                                    flags |= TELEM_FLAG_EKF_UNHEALTHY;
     if (g_fsm_failsafe_fired)                                         flags |= TELEM_FLAG_FAILSAFE;
     pkt.flags = flags;
 
