@@ -103,9 +103,8 @@ const osThreadAttr_t defaultTask_attributes = {
 #define ENABLE_DIAGNOSTICS 1  /* 註解此行即可完全關閉診斷任務以節省資源 */
 
 volatile float g_main_task_cpu_usage = 0.0f;
-FlightState_t current_fsm_state = STATE_INIT;
-uint32_t flight_start_tick = 0;
-float last_vel_z = 0.0f;
+FlightState_t current_fsm_state = STATE_INIT;   /* 由 FSM 包裝層自 g_fsm_ctx 鏡射（P0-A） */
+uint32_t flight_start_tick = 0;                 /* 同上；速度歷史 last_vel_z 已收入 FSM_Context_t */
 uint8_t sd_logging_active = 0;
 /* 落地時刻 tick（0 = 尚未落地）。SD 全程記錄據此由 100Hz 降為 10Hz，並於逾時後自動關檔 (Item E)。 */
 volatile uint32_t g_touchdown_tick = 0;
@@ -1422,143 +1421,80 @@ int _write(int file, char *ptr, int len)
   return len;
 }
 
+/* === FSM 包裝層（P0-A）：純邏輯已抽離至 fsm.c/h，由 tests/test_fsm.c 驗證 ===
+ * 此處職責：組輸入快照 → FSM_Step() → 執行硬體動作 → 鏡射全域 → 事件列印。
+ * 硬體動作（點火/舵機/蜂鳴器）嚴格先於 printf：避免 UART 阻塞（~9ms/行）延遲開傘。 */
+static FSM_Context_t g_fsm_ctx;
+
 static void FSM_Update(void)
 {
     EKF_State_t ekf_state = EKF_GetState();
-    float h_est = ekf_state.pos_z;  // 卡爾曼估計高度 (m)
-    float v_est = ekf_state.vel_z;  // 卡爾曼估計垂直速度 (m/s)
-    float a_z = highg_data.az;      // 高 G 垂直加速度 (g)
     uint32_t now = HAL_GetTick();
-    static uint32_t state_entered_tick = 0;
-    static float max_altitude = 0.0f;
-    static uint8_t consec_apogee_counts = 0;
 
-    // 更新觀測到的最大高度
-    if (h_est > max_altitude) {
-        max_altitude = h_est;
+    FSM_Input_t in;
+    in.now_ms         = now;
+    in.h_est          = ekf_state.pos_z;   // 卡爾曼估計高度 (m)
+    in.v_est          = ekf_state.vel_z;   // 卡爾曼估計垂直速度 (m/s)
+    in.a_z_g          = highg_data.az;     // 高 G 垂直加速度 (g)
+    in.baro_alt_rel   = 0.0f;              // P0-B 起由 pad 基準計算
+    in.ekf_calibrated = EKF_calibrated;
+    in.ekf_healthy    = 1U;                // P0-C 起接 EKF_GetHealthBits()
+    in.sensor_bits    = 0U;                // P0-D 起接 sensor_health
+
+    FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
+
+    /* --- 1. 硬體動作（先於任何列印） --- */
+    if (act.fire_drogue) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 導通副傘引爆 MOSFET
+    }
+    if (act.release_drogue) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 點火限時導通保護：斷開
+    }
+    if (act.deploy_main) {
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
+    }
+    if (act.start_buzzer) {
+        // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
+        htim2.Instance->ARR  = 999;
+        htim2.Instance->CCR1 = 500;
+        htim2.Instance->EGR  = TIM_EGR_UG;
     }
 
-    switch (current_fsm_state) {
-        case STATE_PAD:
-            // 等待靜態校準完成
-            if (EKF_calibrated) {
-                // 起飛觸發條件：高G加速度 > 3.0g 或是高度 > 10.0m
-                if (a_z > 3.0f || h_est > 10.0f) {
-                    current_fsm_state = STATE_BOOST;
-                    flight_start_tick = now;
-                    state_entered_tick = now;
-                    printf("[FSM] 🚀 LIFTOFF DETECTED! Transition to STATE_BOOST.\r\n");
-                }
-            }
+    /* --- 2. 鏡射回全域（telemetry / flash ring / SD / EKF 既有讀取點不變） --- */
+    current_fsm_state = g_fsm_ctx.state;
+    flight_start_tick = g_fsm_ctx.flight_start_ms;
+    if (act.event == FSM_EVT_TOUCHDOWN) {
+        g_touchdown_tick = now;   // 記錄落地時刻：SD 記錄降為 10Hz，逾時或按 USER_BT1 後關檔
+    }
+
+    /* --- 3. 事件列印（訊息逐字保留自原 FSM_Update） --- */
+    switch ((FSM_Event_t)act.event) {
+        case FSM_EVT_LIFTOFF:
+            printf("[FSM] 🚀 LIFTOFF DETECTED! Transition to STATE_BOOST.\r\n");
             break;
-
-        case STATE_BOOST:
-            // 馬達燒完判定：加速度 < 0.5g 且 flight time > 1.5 秒
-            if (a_z < 0.5f && (now - state_entered_tick) > 1500) {
-                current_fsm_state = STATE_COAST;
-                state_entered_tick = now;
-                printf("[FSM] 🔥 MOTOR BURNOUT! Entering STATE_COAST.\r\n");
-            }
+        case FSM_EVT_BURNOUT:
+            printf("[FSM] 🔥 MOTOR BURNOUT! Entering STATE_COAST.\r\n");
             break;
-
-        case STATE_COAST: {
-            // 動態頂點預估 (預估 4.0s 前開副傘)
-            float decel = -9.80665f;
-            if (last_vel_z != 0.0f) {
-                float a_z_nav = (v_est - last_vel_z) / 0.010f; // 10ms 速度差所得加速度
-                if (a_z_nav < -5.0f && a_z_nav > -25.0f) {
-                    decel = a_z_nav;
-                }
-            }
-
-            float t_to_apogee = -v_est / decel;
-
-            // 頂點判定條件：
-            // 1. 動態預測時間 <= 4.0s (且仍處於上升狀態 v_est > 0)
-            // 2. 備用安全判定：垂直速度過零 (v_est < -0.2 m/s) 或是高度從峰值下降超過 5.0m
-            // 同時必須滿足起飛時間鎖（起飛後累計大於 3.0 秒）
-            uint8_t apogee_condition = 0;
-            if (v_est > 0.0f && t_to_apogee <= DROGUE_LEAD_TIME_S) {
-                apogee_condition = 1;
-            } else if (v_est < -0.2f || (max_altitude - h_est) > 5.0f) {
-                apogee_condition = 1;
-            }
-
-            if (apogee_condition && (now - flight_start_tick) > 3000) {
-                consec_apogee_counts++;
-                if (consec_apogee_counts >= 5) { // 連續 5 個週期 (50ms) 成立以防雜訊
-                    current_fsm_state = STATE_APOGEE;
-                    state_entered_tick = now;
-                    printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
-                           t_to_apogee, h_est);
-
-                    // 1. 導通副傘引爆 MOSFET (PD13 = HIGH)
-                    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
-                }
-            } else {
-                consec_apogee_counts = 0;
-            }
+        case FSM_EVT_APOGEE:
+            printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
+                   act.apogee_t_pred, in.h_est);
             break;
-        }
-
-        case STATE_APOGEE:
-            // 點火限時導通保護：持續導通 2.0 秒後強制拉低
-            if (now - state_entered_tick >= 2000) {
-                HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET); // 斷開點火
-                current_fsm_state = STATE_DESCENT;
-                state_entered_tick = now;
-                printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
-            }
+        case FSM_EVT_DROGUE_DONE:
+            printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
             break;
-
-        case STATE_DESCENT: {
-            // 動態主傘部署高度計算：h_trigger = h_target + |v_fall| * t_delay
-            float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
-            float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
-
-            // 觸發條件：高度低於觸發高度，或是飛行總時間看門狗超時 (25秒)
-            if (h_est <= h_trigger_main || (now - flight_start_tick) > 25000) {
-                current_fsm_state = STATE_MAIN_DEPLOY;
-                state_entered_tick = now;
-                printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n",
-                       h_est, TARGET_MAIN_ALTITUDE, v_est);
-
-                // 2. 部署主傘：控制 PD14 釋放舵機 (設 PWM 脈寬為 2000，即釋放角度)
-                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);
-            }
+        case FSM_EVT_MAIN_DEPLOY:
+            printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n",
+                   in.h_est, TARGET_MAIN_ALTITUDE, in.v_est);
             break;
-        }
-
-        case STATE_MAIN_DEPLOY:
-            // 等待 3 秒讓主傘充氣張開，隨後進入落地偵測
-            if (now - state_entered_tick >= 3000) {
-                current_fsm_state = STATE_LANDED;
-                state_entered_tick = now;
-                printf("[FSM] Main deployed. Entering landing detection.\r\n");
-            }
+        case FSM_EVT_MAIN_OPEN:
+            printf("[FSM] Main deployed. Entering landing detection.\r\n");
             break;
-
-        case STATE_LANDED:
-            // 落地判定：下墜速度趨近零，且高度小於 20m（僅觸發一次）
-            if (g_touchdown_tick == 0 && fabsf(v_est) < 0.3f && h_est < 20.0f) {
-                g_touchdown_tick = now;   // 記錄落地時刻：SD 記錄降為 10Hz，逾時或按 USER_BT1 後關檔
-                printf("[FSM] 🏁 TOUCHDOWN! 持續記錄中（降頻 10Hz）。按 USER_BT1 或逾時後自動關檔。\r\n");
-
-                // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
-                htim2.Instance->ARR  = 999;
-                htim2.Instance->CCR1 = 500;
-                htim2.Instance->EGR  = TIM_EGR_UG;
-
-                // 注意：不再立即關閉 SD、也不再 vTaskSuspend。改由主迴圈 SD 記錄區塊持續記錄，
-                // 待停止條件達成時才安全關檔，使遙測 / Flash ring / 尋標蜂鳴器在落地後仍持續運作 (Item E)。
-            }
+        case FSM_EVT_TOUCHDOWN:
+            printf("[FSM] 🏁 TOUCHDOWN! 持續記錄中（降頻 10Hz）。按 USER_BT1 或逾時後自動關檔。\r\n");
             break;
-
         default:
             break;
     }
-
-    last_vel_z = v_est; // 儲存速度歷史
 }
 
 uint16_t ADC_Read_Battery_mv(void) {
@@ -1913,11 +1849,14 @@ void StartDefaultTask(void *argument)
           EKF_in_flight = 1;      // 強制將 EKF 設為飛行狀態
           current_fsm_state = (FlightState_t)last_pkt.fsm_state;
           flight_start_tick = HAL_GetTick() - last_pkt.tick_ms; // 恢復起飛基準 Tick
+          FSM_Init(&g_fsm_ctx, current_fsm_state, HAL_GetTick(), flight_start_tick, 0U);
       } else {
           current_fsm_state = STATE_PAD; // 正常地面起飛
+          FSM_Init(&g_fsm_ctx, STATE_PAD, HAL_GetTick(), 0U, 0U);
       }
   } else {
       current_fsm_state = STATE_PAD; // 正常地面起飛
+      FSM_Init(&g_fsm_ctx, STATE_PAD, HAL_GetTick(), 0U, 0U);
   }
 
   /* FlashRing_Init 阻塞約 2s，BMP388（主迴圈讀取）在此期間無法累積計數。
@@ -2126,8 +2065,6 @@ void StartDefaultTask(void *argument)
         float raw_gz         = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
         sensor_imu_to_body(raw_gx, raw_gy, raw_gz, &imu_data.gx, &imu_data.gy, &imu_data.gz);
 
-        // 呼叫 FSM 狀態機進行 100Hz 定時狀態轉移判定
-        FSM_Update();
     }
 
     /* === ADXL375 Ping-Pong 雙緩衝區批次數據提取 (3.2 kHz 中斷在背後默默採樣並填充) === */
@@ -2147,6 +2084,14 @@ void StartDefaultTask(void *argument)
                              &highg_data.ax, &highg_data.ay, &highg_data.az);
         
         // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_adxl_batches[ready_idx] 共 32 筆資料，即為 3.2 kHz HIL 實時存檔
+    }
+
+    /* === FSM 100Hz 定時執行（P0-A：自 BMI088 批次條件塊移出） ===
+     * 舊版在 if (bmi088_ok && batch_ready) 內呼叫 → BMI088 初始化失敗或飛行中
+     * 批次斷流時，FSM（含後續 P0-B 失效保護計時器）會整個停擺。
+     * 改為無條件 tick 定時：感測器斷流時 FSM 仍持續運作（吃最後快照 + EKF 狀態）。 */
+    if (tick % FSM_STEP_PERIOD_MS == 0) {
+        FSM_Update();
     }
 
     /* === GPS（USART6 NMEA）：每迴圈嘗試消化一整句 ===

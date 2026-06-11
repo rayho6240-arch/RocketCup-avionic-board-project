@@ -31,21 +31,12 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "fsm.h"   /* FlightState_t 與 FSM 參數（P0-A 抽離至純邏輯模組） */
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-typedef enum {
-    STATE_INIT = 0,        // 系統初始化與自檢
-    STATE_PAD = 1,         // 發射架上（等待校準完成）
-    STATE_BOOST = 2,       // 動力上升（馬達燃燒）
-    STATE_COAST = 3,       // 慣性滑行（頂點預測與監控啟用）
-    STATE_APOGEE = 4,      // 達到頂點（觸發副傘/drogue部署，PD13 點火）
-    STATE_DESCENT = 5,     // 副傘下降（監控主傘部署高度）
-    STATE_MAIN_DEPLOY = 6, // 主傘部署（動態高度觸發舵機旋轉）
-    STATE_LANDED = 7       // 安全著陸（尋標蜂鳴器與安全關檔）
-} FlightState_t;
+/* FlightState_t 已移至 fsm.h（host 可測純邏輯模組，P0-A） */
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -138,9 +129,7 @@ void Error_Handler(void);
 #define CSB_LORA920_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
-#define TARGET_MAIN_ALTITUDE     150.0f  // 目標主傘完全張開高度 (m)
-#define MAIN_DEPLOY_DELAY_S      3.5f    // 主傘機構部署延遲時間 (s)
-#define DROGUE_LEAD_TIME_S       4.0f    // 副傘頂點預估提前開傘時間 (s)
+/* TARGET_MAIN_ALTITUDE / MAIN_DEPLOY_DELAY_S / DROGUE_LEAD_TIME_S 已移至 fsm.h（P0-A） */
 #define SD_LANDED_LOG_TIMEOUT_MS 1800000UL  // 落地後 SD 持續記錄上限 (30 分鐘)，逾時自動關檔
 /* USER CODE END Private defines */
 
