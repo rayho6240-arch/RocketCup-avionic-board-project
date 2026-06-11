@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "w25qxx.h"
+#include "mmc5983.h"
+#include "attitude_math.h"   /* TRIAD 與四元數工具（與 host 測試共用同一份） */
 
 // -------------------------------------------------------------------------
 // Global EKF variables residing in CCM RAM
@@ -39,6 +42,7 @@ static uint32_t EKF_baro_samples CCMRAM = 0;
 
 // Flight state transition flag, launch counter, and rest counter
 uint8_t EKF_in_flight CCMRAM = 0;
+uint8_t g_mag_yaw_lock = 1;
 static uint32_t EKF_launch_counter CCMRAM = 0;
 static uint32_t EKF_rest_counter CCMRAM = 0;
 
@@ -73,6 +77,8 @@ static const float GRAVITY = 9.80665f;
 // GPS equirectangular-projection constants
 static const float EARTH_RADIUS_M = 6378137.0f;            // WGS84 semi-major axis
 static const float DEG2RAD = 0.017453292519943295f;        // pi / 180
+
+static volatile float g_ekf_cpu_usage CCMRAM = 0.0f;
 
 // -------------------------------------------------------------------------
 // FreeRTOS Task and Queue definitions mapped to CCM RAM
@@ -157,6 +163,31 @@ void EKF_Init(void) {
     EKF_mag_x = 0.0f;
     EKF_mag_y = 0.0f;
     EKF_mag_z = 0.0f;
+
+    // Load static calibration parameters from flash if they exist
+    EKF_LoadCalibrationFromFlash();
+}
+
+void EKF_ResetOrientation(void) {
+    taskENTER_CRITICAL();
+    // Reset position and velocity to 0
+    memset(EKF_x, 0, sizeof(EKF_x));
+    
+    // Reset state covariance P to standard diagonal elements
+    memset(EKF_P, 0, sizeof(EKF_P));
+    for (int i = 0; i < 3; i++) {
+        EKF_P[i][i] = 1.0f;       // Initial position uncertainty (1.0 m^2)
+        EKF_P[i+3][i+3] = 2.0f;   // Initial velocity uncertainty (2.0 m^2/s^2)
+    }
+    
+    // Reset attitude quaternion to identity (defines current physical alignment as upright)
+    EKF_q[0] = 1.0f;
+    EKF_q[1] = 0.0f;
+    EKF_q[2] = 0.0f;
+    EKF_q[3] = 0.0f;
+    taskEXIT_CRITICAL();
+    
+    printf("[EKF] Orientation & Position manually reset to zero (upright)!\r\n");
 }
 
 void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float az, float dt) {
@@ -169,7 +200,8 @@ void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float 
     // Complementary Filter gravity feedback loop. This uses the accelerometer's
     // gravity vector to estimate roll and pitch errors, and feeds them back
     // to correct gyroscope drift, forcing the attitude to pull back to absolute level.
-    if (!EKF_in_flight) {
+    extern FlightState_t current_fsm_state;
+    if ((1 && !EKF_in_flight) || (current_fsm_state >= STATE_DESCENT)) {
         float norm_a = sqrtf(ax*ax + ay*ay + az*az);
         if (norm_a > 0.01f) {
             float ax_n = ax / norm_a;
@@ -215,6 +247,19 @@ void EKF_AttitudeUpdate(float gx, float gy, float gz, float ax, float ay, float 
     }
 }
 
+// Compute initial attitude quaternion from gravity vector + magnetometer vector using TRIAD.
+// grav_b : body-frame gravity (averaged accel during calibration, points toward +Z when upright).
+// mag_b  : body-frame magnetic field (body-frame, already remapped).
+// Sets EKF_q to the correct absolute attitude so Mahony has nothing left to converge.
+static void EKF_InitAttitudeFromAccelMag(const float grav_b[3], const float mag_b[3]) {
+    // TRIAD：由 body 重力 + 磁場求 body->nav 初始四元數（純數學在 attitude_math.h，
+    // 已由 tests/test_sensor_axis.c 獨立驗證）。退化時 q 保持不變，交由 Mahony 收斂。
+    float q[4];
+    if (att_triad_grav_mag_to_quat(grav_b, mag_b, q)) {
+        EKF_q[0] = q[0]; EKF_q[1] = q[1]; EKF_q[2] = q[2]; EKF_q[3] = q[3];
+    }
+}
+
 // Magnetometer heading (yaw) correction, Mahony-style, in the SAME body->nav
 // rotation convention as EKF_AttitudeUpdate/EKF_Predict (a_nav = R*a_body, with
 // the gravity/up direction in body = third row of R). The horizontal-collapse of
@@ -246,15 +291,15 @@ static void EKF_MagYawUpdate(float mx, float my, float mz, float dt) {
     float hy = r21*mxn + r22*myn + r23*mzn;
     float hz = r31*mxn + r32*myn + r33*mzn;
 
-    // Reference field b = [bx, 0, bz]: horizontal magnitude collapsed onto nav-East,
+    // Reference field b = [0, by, bz]: horizontal magnitude collapsed onto nav-North,
     // measured inclination kept on Up. Fixes the heading origin without touching tilt.
-    float bx = sqrtf(hx*hx + hy*hy);
+    float by = sqrtf(hx*hx + hy*hy);
     float bz = hz;
 
-    // Predicted mag direction back in body frame: w = R^T * b   (by = 0)
-    float wx = r11*bx + r31*bz;
-    float wy = r12*bx + r32*bz;
-    float wz = r13*bx + r33*bz;
+    // Predicted mag direction back in body frame: w = R^T * b   (bx = 0)
+    float wx = r21*by + r31*bz;
+    float wy = r22*by + r32*bz;
+    float wz = r23*by + r33*bz;
 
     // Error = measured x predicted (body frame); predominantly a yaw error vector
     float ex = (myn*wz - mzn*wy);
@@ -616,28 +661,44 @@ void EKF_Task(void *argument) {
                         }
                         
                         EKF_calibrated = 1;
-                        
-                        printf("[EKF] Stationary Calibration Done!\r\n");
+                        EKF_SaveCalibrationToFlash();
+
+                        // Initialize attitude from accel (gravity direction) + mag (heading).
+                        // This gives the correct absolute attitude immediately — no Mahony convergence needed.
+                        // grav_b = raw average accel during calibration (before bias removal; points toward +Z_body when upright)
+                        float grav_b[3] = {
+                            EKF_accel_sum[0] / 3000.0f,
+                            EKF_accel_sum[1] / 3000.0f,
+                            EKF_accel_sum[2] / 3000.0f
+                        };
+                        // Use the most recently submitted mag vector (body-frame, from EKF_SubmitMag).
+                        // If mag is not yet available (EKF_mag_x/y/z still 0), TRIAD will return early
+                        // and q stays identity — Mahony will then converge normally from the pad.
+                        float mag_b[3] = { EKF_mag_x, EKF_mag_y, EKF_mag_z };
+                        EKF_InitAttitudeFromAccelMag(grav_b, mag_b);
+
+                        printf("[EKF] Stationary Calibration Done!\n");
                         printf("  -> Accel Bias X:");
                         EKF_PrintFloat(EKF_accel_bias[0], ' ');
                         printf("Y:");
                         EKF_PrintFloat(EKF_accel_bias[1], ' ');
                         printf("Z:");
-                        EKF_PrintFloat(EKF_accel_bias[2], '\r\n');
+                        EKF_PrintFloat(EKF_accel_bias[2], '\n');
                         printf("  -> Gyro Bias X:");
                         EKF_PrintFloat(EKF_gyro_bias[0], ' ');
                         printf("Y:");
                         EKF_PrintFloat(EKF_gyro_bias[1], ' ');
                         printf("Z:");
-                        EKF_PrintFloat(EKF_gyro_bias[2], '\r\n');
+                        EKF_PrintFloat(EKF_gyro_bias[2], '\n');
                         printf("  -> Launchpad Baro Alt: ");
                         EKF_PrintFloat(EKF_baro_launchpad, ' ');
                         printf("m\r\n");
                     }
                     
-                    // Maintain pre-launch state lock
+                    // Keep position/velocity locked to zero during calibration.
+                    // Do NOT reset q here — after calibration completes, TRIAD has already set the
+                    // correct initial attitude; resetting it to identity would undo that work.
                     memset(EKF_x, 0, sizeof(EKF_x));
-                    EKF_q[0] = 1.0f; EKF_q[1] = 0.0f; EKF_q[2] = 0.0f; EKF_q[3] = 0.0f;
                     continue; // Skip propagation during active calibration
                 }
 
@@ -670,8 +731,9 @@ void EKF_Task(void *argument) {
                         EKF_PrintFloat(relative_baro_alt, ' ');
                         printf("m)\r\n");
                     } else {
+                        // [TEST] ZUPT disabled for EKF algorithm testing
                         // Force states to 0 to eliminate all pre-launch horizontal and vertical drift
-                        memset(EKF_x, 0, sizeof(EKF_x));
+                        // memset(EKF_x, 0, sizeof(EKF_x));
                     }
                 }
 
@@ -762,7 +824,7 @@ void EKF_Task(void *argument) {
                 EKF_mag_pending = 0;
                 taskEXIT_CRITICAL();
 
-                if (EKF_calibrated && !EKF_in_flight) {
+                if (g_mag_yaw_lock && EKF_calibrated && !EKF_in_flight) { // Ground magnetometer heading correction enabled
                     EKF_MagYawUpdate(m_x, m_y, m_z, 0.1f);  // ~10Hz buffer cadence
                 }
             }
@@ -770,6 +832,24 @@ void EKF_Task(void *argument) {
             uint32_t end_cycles = DWT->CYCCNT;
             uint32_t elapsed_cycles = end_cycles - start_cycles;
             float elapsed_ms = (float)elapsed_cycles / (float)SystemCoreClock * 1000.0f;
+
+            // Accumulate cycles for CPU usage calculation
+            static uint32_t ekf_accumulated_cycles = 0;
+            static uint32_t last_cpu_calc_tick = 0;
+            uint32_t current_tick = HAL_GetTick();
+            if (last_cpu_calc_tick == 0) {
+                last_cpu_calc_tick = current_tick;
+            }
+            ekf_accumulated_cycles += elapsed_cycles;
+            if (current_tick - last_cpu_calc_tick >= 1000) {
+                uint32_t elapsed_ms_time = current_tick - last_cpu_calc_tick;
+                uint32_t total_possible_cycles = elapsed_ms_time * (SystemCoreClock / 1000);
+                if (total_possible_cycles > 0) {
+                    g_ekf_cpu_usage = (float)ekf_accumulated_cycles / (float)total_possible_cycles * 100.0f;
+                }
+                ekf_accumulated_cycles = 0;
+                last_cpu_calc_tick = current_tick;
+            }
 
             // Report estimated position, velocity, attitude and execution duration
             EKF_State_t current = EKF_GetState();
@@ -803,5 +883,173 @@ void EKF_Task(void *argument) {
             EKF_PrintFloat(current.q[3], '\r'); // carriage return + newline printed next
             printf("\n");
         }
+    }
+}
+
+float EKF_GetCPUUsage(void) {
+    return g_ekf_cpu_usage;
+}
+
+/* ============================================================
+ *  EKF 靜態偏置與空中熱啟動狀態恢復
+ * ============================================================ */
+
+void EKF_SaveCalibrationToFlash(void)
+{
+    FlashSysFlags_t sys_flags;
+    // 1. 讀取既有旗標以保留其他欄位 (如重啟次數等)
+    if (Flash_ReadSysFlags(&sys_flags) != W25QXX_OK) {
+        memset(&sys_flags, 0, sizeof(FlashSysFlags_t));
+    }
+
+    // 2. 更新 EKF 校準參數
+    sys_flags.calib.magic = 0xC0DEB1A5;
+    sys_flags.calib.baro_launchpad = EKF_baro_launchpad;
+    sys_flags.calib.accel_bias[0] = EKF_accel_bias[0];
+    sys_flags.calib.accel_bias[1] = EKF_accel_bias[1];
+    sys_flags.calib.accel_bias[2] = EKF_accel_bias[2];
+    sys_flags.calib.gyro_bias[0] = EKF_gyro_bias[0];
+    sys_flags.calib.gyro_bias[1] = EKF_gyro_bias[1];
+    sys_flags.calib.gyro_bias[2] = EKF_gyro_bias[2];
+
+    // 3. 讀取並更新地磁計硬鐵偏移
+    const MMC5983_Data_t *mag = MMC5983_GetData();
+    sys_flags.mag_offsets[0] = (float)mag->offset[0];
+    sys_flags.mag_offsets[1] = (float)mag->offset[1];
+    sys_flags.mag_offsets[2] = (float)mag->offset[2];
+
+    // 4. 寫入 Flash Sector 0
+    if (Flash_WriteSysFlags(&sys_flags) == W25QXX_OK) {
+        printf("[EKF] Static Calibration Saved to Flash (Sector 0)!\r\n");
+    } else {
+        printf("[EKF] ERROR: Failed to save calibration to Flash!\r\n");
+    }
+}
+
+void EKF_LoadCalibrationFromFlash(void)
+{
+    FlashSysFlags_t sys_flags;
+    if (Flash_ReadSysFlags(&sys_flags) == W25QXX_OK) {
+        if (sys_flags.calib.magic == 0xC0DEB1A5) {
+            EKF_baro_launchpad = sys_flags.calib.baro_launchpad;
+            EKF_accel_bias[0]  = sys_flags.calib.accel_bias[0];
+            EKF_accel_bias[1]  = sys_flags.calib.accel_bias[1];
+            EKF_accel_bias[2]  = sys_flags.calib.accel_bias[2];
+            EKF_gyro_bias[0]   = sys_flags.calib.gyro_bias[0];
+            EKF_gyro_bias[1]   = sys_flags.calib.gyro_bias[1];
+            EKF_gyro_bias[2]   = sys_flags.calib.gyro_bias[2];
+
+            // 還原地磁計硬鐵偏移
+            MMC5983_SetOffsets(sys_flags.mag_offsets);
+
+            EKF_calibrated = 1; // Mark calibration as complete
+
+            printf("[EKF] Static Calibration Restored from Flash (Sector 0)!\r\n");
+            printf("  -> Launchpad Baro Alt: ");
+            EKF_PrintFloat(EKF_baro_launchpad, ' ');
+            printf("m\r\n");
+            return;
+        }
+    }
+    printf("[EKF] No valid static calibration found in Flash.\r\n");
+}
+
+void EKF_HotRestartRestore(float last_altitude, float est_vel_z, const float *last_q)
+{
+    if (last_q == NULL) return;
+
+    // 1. 注入高度與垂直速度
+    EKF_x[0] = 0.0f; // 重置水平位置
+    EKF_x[1] = 0.0f;
+    EKF_x[2] = last_altitude;
+    EKF_x[3] = 0.0f; // 重置水平速度
+    EKF_x[4] = 0.0f;
+    EKF_x[5] = est_vel_z;
+
+    // 2. 注入最後記錄的姿態四元數
+    EKF_q[0] = last_q[0];
+    EKF_q[1] = last_q[1];
+    EKF_q[2] = last_q[2];
+    EKF_q[3] = last_q[3];
+
+    // 3. 正規化四元數
+    float norm = sqrtf(EKF_q[0]*EKF_q[0] + EKF_q[1]*EKF_q[1] + EKF_q[2]*EKF_q[2] + EKF_q[3]*EKF_q[3]);
+    if (norm > 1e-6f) {
+        EKF_q[0] /= norm;
+        EKF_q[1] /= norm;
+        EKF_q[2] /= norm;
+        EKF_q[3] /= norm;
+    } else {
+        // Fallback
+        EKF_q[0] = 1.0f;
+        EKF_q[1] = 0.0f;
+        EKF_q[2] = 0.0f;
+        EKF_q[3] = 0.0f;
+    }
+
+    // 4. 重置協方差矩陣 P 為適當的空中初始不確定度
+    memset(EKF_P, 0, sizeof(EKF_P));
+    EKF_P[0][0] = 10.0f; // 東向位置
+    EKF_P[1][1] = 10.0f; // 北向位置
+    EKF_P[2][2] = 5.0f;  // 垂直高度
+    EKF_P[3][3] = 2.0f;  // 東向速度
+    EKF_P[4][4] = 2.0f;  // 北向速度
+    EKF_P[5][5] = 1.0f;  // 垂直速度
+
+    printf("[EKF] Hot-Restart State Injected!\r\n");
+    printf("  -> Alt: ");
+    EKF_PrintFloat(EKF_x[2], ' ');
+    printf("VelZ: ");
+    EKF_PrintFloat(EKF_x[5], '\n');
+    printf("  -> Q: ");
+    EKF_PrintFloat(EKF_q[0], ' ');
+    EKF_PrintFloat(EKF_q[1], ' ');
+    EKF_PrintFloat(EKF_q[2], ' ');
+    EKF_PrintFloat(EKF_q[3], '\n');
+}
+
+void EKF_ResetCalibration(void)
+{
+    taskENTER_CRITICAL();
+    EKF_calibrated = 0;
+    EKF_calib_samples = 0;
+    memset(EKF_accel_bias, 0, sizeof(EKF_accel_bias));
+    memset(EKF_accel_sum, 0, sizeof(EKF_accel_sum));
+    memset(EKF_gyro_bias, 0, sizeof(EKF_gyro_bias));
+    memset(EKF_gyro_sum, 0, sizeof(EKF_gyro_sum));
+    EKF_baro_launchpad = 0.0f;
+    EKF_baro_sum = 0.0f;
+    EKF_baro_samples = 0;
+    taskEXIT_CRITICAL();
+    
+    // Clear flash calibration magic number
+    FlashSysFlags_t sys_flags;
+    if (Flash_ReadSysFlags(&sys_flags) == W25QXX_OK) {
+        sys_flags.calib.magic = 0;
+        Flash_WriteSysFlags(&sys_flags);
+    }
+    
+    printf("[EKF] Static calibration reset triggered!\r\n");
+}
+
+void EKF_SaveMagCalibration(float cx, float cy, float cz) {
+    FlashSysFlags_t sys_flags;
+    // 1. 讀取既有旗標以保留其他欄位 (如重啟次數等)
+    if (Flash_ReadSysFlags(&sys_flags) != W25QXX_OK) {
+        memset(&sys_flags, 0, sizeof(FlashSysFlags_t));
+    }
+    
+    // 2. 更新地磁偏置
+    sys_flags.mag_offsets[0] = cx;
+    sys_flags.mag_offsets[1] = cy;
+    sys_flags.mag_offsets[2] = cz;
+    
+    // 3. 寫入 Flash Sector 0
+    if (Flash_WriteSysFlags(&sys_flags) == W25QXX_OK) {
+        // 套用到感測器
+        MMC5983_SetOffsets(sys_flags.mag_offsets);
+        printf("[CAL] Mag hard-iron offset saved to Flash: %.1f, %.1f, %.1f\r\n", cx, cy, cz);
+    } else {
+        printf("[CAL] ERROR: Failed to save mag offsets to Flash!\r\n");
     }
 }

@@ -68,3 +68,6 @@ Release/
 *.hex
 *.bin
 *.list
+
+# --- 報價單與清點工具 ---
+checklist.html

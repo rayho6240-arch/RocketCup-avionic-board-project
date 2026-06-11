@@ -32,6 +32,11 @@
 #include "ekf.h"
 #include "gps.h"
 #include "mmc5983.h"
+#include "sensor_axis.h"   /* 感測器->body 軸向映射（唯一真相來源，見 sensor_axis.h） */
+#include "telemetry.h"     /* 共用二進制+CRC16 下行遙測封包 */
+#include "lora_e22.h"      /* E22-400T30S 433MHz LoRa 透傳 (UART3) */
+#include "lora_e80.h"      /* E80-900M2213S 920MHz LoRa (SX126x SPI3) */
+#include "spi3_bus.h"      /* SPI3 共用匯流排互斥鎖 (Flash + E80) */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -83,6 +88,7 @@ UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart6_rx;
+DMA_HandleTypeDef hdma_i2c1_rx; // Dummy handle to prevent linker/compiler errors in generated code
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
@@ -94,6 +100,9 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+#define ENABLE_DIAGNOSTICS 1  /* 註解此行即可完全關閉診斷任務以節省資源 */
+
+volatile float g_main_task_cpu_usage = 0.0f;
 FlightState_t current_fsm_state = STATE_INIT;
 uint32_t flight_start_tick = 0;
 float last_vel_z = 0.0f;
@@ -109,6 +118,14 @@ uint8_t bmi088_ok = 0;
 uint8_t adxl375_ok = 0;
 uint8_t bmp388_ok = 0;
 uint8_t mag_ok = 0;       /* MMC5983MA 地磁計（I2C1）初始化狀態 */
+uint8_t lora433_ok = 0;   /* E22-400T30S 433MHz LoRa (UART3 透傳) 初始化狀態 */
+uint8_t lora920_ok = 0;   /* E80-900M2213S 920MHz LoRa (SX126x SPI3) 初始化狀態 */
+
+/* 最新電池電壓 (mV)，由飛控迴圈讀 ADC 後更新；遙測與 [PWR] 行唯讀此值（避免 ADC 並發） */
+volatile uint16_t g_bat_voltage_mv = 0;
+
+/* SPI3 共用匯流排互斥鎖（W25Q128 Flash + E80 920MHz LoRa）。於 RTOS init 建立。 */
+osMutexId_t g_spi3_mutex = NULL;
 
 /* 採樣率監測器：在 IDE Watch / Live Expressions 加入《g_sampling_rate》即可一次觀察所有感測器 */
 SAMPLING_RATE_DECL();   /* 展開為: SamplingRateAll_t g_sampling_rate */
@@ -195,7 +212,11 @@ static void MX_RNG_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+uint16_t ADC_Read_Battery_mv(void);
+void LoRaTelemetry_Task(void *argument);   /* 5Hz 下行遙測：E22(433) + E80(920) */
+#ifdef ENABLE_DIAGNOSTICS
+void StartDiagnosticTask(void *argument);
+#endif
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -298,7 +319,7 @@ int main(void)
   /* MMC5983MA 三軸地磁計啟動 (I2C1, SCL=PB7/SDA=PB8, 位址 0x30)。
    * 初始化含 Product ID 驗證、軟體重置、400Hz 頻寬與一次 SET/RESET 橋偏校準。
    * 失敗（晶片未上線）僅記錄旗標，不阻擋系統啟動。 */
-  if (MMC5983_Init(&hi2c1) == HAL_OK) {
+  if (MMC5983_Init() == HAL_OK) {
       mag_ok = 1;
       printf("[MAG] MMC5983MA online. offset[X,Y,Z]=%ld,%ld,%ld\r\n",
              (long)MMC5983_GetData()->offset[0],
@@ -307,6 +328,22 @@ int main(void)
   } else {
       mag_ok = 0;
       printf("[MAG] MMC5983MA NOT detected (I2C1).\r\n");
+  }
+
+  /* E22-400T30S 433MHz LoRa 啟動（UART3 透傳模式 M0=M1=0）。
+   * 重置 + 等 AUX 拉高；未接模組也不阻擋啟動（發送由 AUX 背壓守護）。 */
+  LoRaE22_Init(&huart3);
+  lora433_ok = 1;   /* 透傳模式無讀回驗證，標記為已嘗試初始化 */
+  printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
+
+  /* E80-900M2213S 920MHz LoRa 啟動（SX126x/LLCC68, SPI3，與 Flash 共用匯流排）。
+   * 讀回 sync word 驗活；失敗僅記錄旗標，不阻擋系統啟動。 */
+  if (LoRaE80_Init(&hspi3) == HAL_OK) {
+      lora920_ok = 1;
+      printf("[LORA920] E80 online (SX126x SPI3).\r\n");
+  } else {
+      lora920_ok = 0;
+      printf("[LORA920] E80 NOT detected (SPI3) - check TCXO/DIO2 config in lora_e80.c.\r\n");
   }
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
@@ -320,7 +357,14 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  /* SPI3 匯流排互斥鎖：W25Q128 Flash 與 E80 920MHz LoRa 共用 SPI3，須互斥存取。
+   * 遞迴 + 優先級繼承：容忍 flash 驅動 CS 巨集的防禦性釋放，並避免高優先飛控任務
+   * 等待 mutex 時被低優先 LoRa 任務造成優先級反轉。 */
+  static const osMutexAttr_t spi3_mutex_attr = {
+    .name = "spi3Bus",
+    .attr_bits = osMutexRecursive | osMutexPrioInherit,
+  };
+  g_spi3_mutex = osMutexNew(&spi3_mutex_attr);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -343,6 +387,22 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
+#ifdef ENABLE_DIAGNOSTICS
+  static const osThreadAttr_t diagnosticTask_attributes = {
+    .name = "diagTask",
+    .stack_size = 512 * 4,
+    .priority = (osPriority_t) osPriorityLow,
+  };
+  osThreadNew(StartDiagnosticTask, NULL, &diagnosticTask_attributes);
+#endif
+  /* LoRa 下行遙測任務（低優先，不影響 1kHz 飛控迴圈時序）。
+   * 即使兩個 LoRa 模組都未初始化也建立——任務內自會跳過未就緒的鏈路。 */
+  static const osThreadAttr_t loraTelemTask_attributes = {
+    .name = "loraTxTask",
+    .stack_size = 512 * 4,
+    .priority = (osPriority_t) osPriorityLow,
+  };
+  osThreadNew(LoRaTelemetry_Task, NULL, &loraTelemTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -1372,12 +1432,12 @@ static void FSM_Update(void)
     static uint32_t state_entered_tick = 0;
     static float max_altitude = 0.0f;
     static uint8_t consec_apogee_counts = 0;
-    
+
     // 更新觀測到的最大高度
     if (h_est > max_altitude) {
         max_altitude = h_est;
     }
-    
+
     switch (current_fsm_state) {
         case STATE_PAD:
             // 等待靜態校準完成
@@ -1391,7 +1451,7 @@ static void FSM_Update(void)
                 }
             }
             break;
-            
+
         case STATE_BOOST:
             // 馬達燒完判定：加速度 < 0.5g 且 flight time > 1.5 秒
             if (a_z < 0.5f && (now - state_entered_tick) > 1500) {
@@ -1400,7 +1460,7 @@ static void FSM_Update(void)
                 printf("[FSM] 🔥 MOTOR BURNOUT! Entering STATE_COAST.\r\n");
             }
             break;
-            
+
         case STATE_COAST: {
             // 動態頂點預估 (預估 4.0s 前開副傘)
             float decel = -9.80665f;
@@ -1410,9 +1470,9 @@ static void FSM_Update(void)
                     decel = a_z_nav;
                 }
             }
-            
+
             float t_to_apogee = -v_est / decel;
-            
+
             // 頂點判定條件：
             // 1. 動態預測時間 <= 4.0s (且仍處於上升狀態 v_est > 0)
             // 2. 備用安全判定：垂直速度過零 (v_est < -0.2 m/s) 或是高度從峰值下降超過 5.0m
@@ -1423,15 +1483,15 @@ static void FSM_Update(void)
             } else if (v_est < -0.2f || (max_altitude - h_est) > 5.0f) {
                 apogee_condition = 1;
             }
-            
+
             if (apogee_condition && (now - flight_start_tick) > 3000) {
                 consec_apogee_counts++;
                 if (consec_apogee_counts >= 5) { // 連續 5 個週期 (50ms) 成立以防雜訊
                     current_fsm_state = STATE_APOGEE;
                     state_entered_tick = now;
-                    printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n", 
+                    printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
                            t_to_apogee, h_est);
-                    
+
                     // 1. 導通副傘引爆 MOSFET (PD13 = HIGH)
                     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
                 }
@@ -1440,7 +1500,7 @@ static void FSM_Update(void)
             }
             break;
         }
-            
+
         case STATE_APOGEE:
             // 點火限時導通保護：持續導通 2.0 秒後強制拉低
             if (now - state_entered_tick >= 2000) {
@@ -1450,25 +1510,25 @@ static void FSM_Update(void)
                 printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
             }
             break;
-            
+
         case STATE_DESCENT: {
             // 動態主傘部署高度計算：h_trigger = h_target + |v_fall| * t_delay
             float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
             float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
-            
+
             // 觸發條件：高度低於觸發高度，或是飛行總時間看門狗超時 (25秒)
             if (h_est <= h_trigger_main || (now - flight_start_tick) > 25000) {
                 current_fsm_state = STATE_MAIN_DEPLOY;
                 state_entered_tick = now;
-                printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n", 
+                printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n",
                        h_est, TARGET_MAIN_ALTITUDE, v_est);
-                
+
                 // 2. 部署主傘：控制 PD14 釋放舵機 (設 PWM 脈寬為 2000，即釋放角度)
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);
             }
             break;
         }
-            
+
         case STATE_MAIN_DEPLOY:
             // 等待 3 秒讓主傘充氣張開，隨後進入落地偵測
             if (now - state_entered_tick >= 3000) {
@@ -1477,7 +1537,7 @@ static void FSM_Update(void)
                 printf("[FSM] Main deployed. Entering landing detection.\r\n");
             }
             break;
-            
+
         case STATE_LANDED:
             // 落地判定：下墜速度趨近零，且高度小於 20m（僅觸發一次）
             if (g_touchdown_tick == 0 && fabsf(v_est) < 0.3f && h_est < 20.0f) {
@@ -1493,13 +1553,232 @@ static void FSM_Update(void)
                 // 待停止條件達成時才安全關檔，使遙測 / Flash ring / 尋標蜂鳴器在落地後仍持續運作 (Item E)。
             }
             break;
-            
+
         default:
             break;
     }
-    
+
     last_vel_z = v_est; // 儲存速度歷史
 }
+
+uint16_t ADC_Read_Battery_mv(void) {
+    uint32_t val = 0;
+    HAL_ADC_Start(&hadc1);
+    if (HAL_ADC_PollForConversion(&hadc1, 10U) == HAL_OK) {
+        val = HAL_ADC_GetValue(&hadc1);
+    }
+    HAL_ADC_Stop(&hadc1);
+    return (uint16_t)((val * 3300UL * 11UL) / 4095UL);
+}
+
+/* ===== SPI3 共用匯流排互斥鎖包裝（W25Q128 Flash + E80 920MHz LoRa，見 spi3_bus.h） =====
+ * NULL-guard：mutex 建立前（scheduler 啟動前的單執行緒初始化階段）為 no-op。
+ * 非持有者釋放：遞迴 mutex 於非持有者呼叫 osMutexRelease 會安全回傳錯誤（忽略），
+ * 故 flash 驅動 CS 巨集中偶發的防禦性 CS_HIGH 不會誤釋放他人持有的鎖。 */
+void SPI3_Bus_Lock(void)
+{
+    if (g_spi3_mutex != NULL) {
+        osMutexAcquire(g_spi3_mutex, osWaitForever);
+    }
+}
+
+void SPI3_Bus_Unlock(void)
+{
+    if (g_spi3_mutex != NULL) {
+        osMutexRelease(g_spi3_mutex);
+    }
+}
+
+/* ===== LoRa 下行遙測任務 =====
+ * 每 LORA_TELEM_PERIOD_MS 打包一筆 TelemetryPacket_t，分別經 E22(433) 與 E80(920) 發送。
+ * 兩條鏈路各自靠 AUX/BUSY + TxDone 背壓自我限流（忙線即跳過），互不阻塞。
+ * 低優先任務：blocking UART 傳輸會被高優先飛控任務搶佔，完全不影響 1kHz 迴圈時序。 */
+#define LORA_TELEM_PERIOD_MS  200U   /* 5Hz 嘗試率（實際受空中速率限制，可於此調整） */
+void LoRaTelemetry_Task(void *argument)
+{
+    (void)argument;
+    static uint8_t tx_buf[TELEM_PACKET_SIZE];
+
+    /* 讓開機自檢 / SD 掛載 / FlashRing 初始化先跑一段再開始發送（非必要，SPI3 mutex 已保護）。 */
+    osDelay(2000);
+
+    uint32_t wake = osKernelGetTickCount();
+    for (;;) {
+        uint16_t len = Telemetry_Build(tx_buf);
+
+        if (lora433_ok) {
+            LoRaE22_Send(tx_buf, len);            /* 忙線(AUX low)回 HAL_BUSY，本次跳過 */
+        }
+        if (lora920_ok) {
+            LoRaE80_Send(tx_buf, (uint8_t)len);   /* 非阻塞；前次 TX 未完成則跳過 */
+        }
+
+        wake += LORA_TELEM_PERIOD_MS;
+        osDelayUntil(wake);
+    }
+}
+
+#ifdef ENABLE_DIAGNOSTICS
+void Poll_Serial_Commands(void);
+void Parse_Serial_Command(const char* cmd);
+
+void StartDiagnosticTask(void *argument)
+{
+  (void)argument;
+  uint32_t tick = 0;
+  uint32_t wake_tick = osKernelGetTickCount();
+  for (;;)
+  {
+      Poll_Serial_Commands();
+
+      if (tick % 50 == 0) {
+          // 1. GPS 遙測
+          const GPS_Data_t *g = GPS_GetData();
+          char     lat_sign = (g->lat_1e6 < 0) ? '-' : '+';
+          char     lon_sign = (g->lon_1e6 < 0) ? '-' : '+';
+          uint32_t lat_abs  = (g->lat_1e6 < 0) ? (uint32_t)(-g->lat_1e6) : (uint32_t)g->lat_1e6;
+          uint32_t lon_abs  = (g->lon_1e6 < 0) ? (uint32_t)(-g->lon_1e6) : (uint32_t)g->lon_1e6;
+          printf("[GPS] fix:%d q:%d sat:%d %c%lu.%06lu,%c%lu.%06lu alt:%dm spd:%dcm/s stale:%d ok:%lu err:%lu\r\n",
+                 (int)g->fix_valid,
+                 (int)g->fix_quality,
+                 (int)g->satellites,
+                 lat_sign, (unsigned long)(lat_abs / 1000000U), (unsigned long)(lat_abs % 1000000U),
+                 lon_sign, (unsigned long)(lon_abs / 1000000U), (unsigned long)(lon_abs % 1000000U),
+                 (int)g->altitude_m,
+                 (int)(g->speed_mps * 100.0f),
+                 (int)GPS_IsStale(2000),
+                 (unsigned long)g->sentences_ok,
+                 (unsigned long)g->sentences_err);
+
+          // 2. 地磁計遙測
+          if (mag_ok) {
+              const MMC5983_Data_t *m = MMC5983_GetData();
+              // 重映射至 body frame (sensor_axis.h)：mag X->-Y, Y->-X, Z->-Z
+              float mx_body, my_body, mz_body;
+              sensor_mag_to_body(m->gauss[0], m->gauss[1], m->gauss[2], &mx_body, &my_body, &mz_body); 
+              float hdg_body = atan2f(-mx_body, my_body) * (180.0f / 3.14159265f);
+              if (hdg_body < 0.0f) hdg_body += 360.0f;
+              printf("[MAG] B[mG]:%d,%d,%d hdg:%d ok:%lu err:%lu\r\n",
+                     (int)(mx_body * 1000.0f),
+                     (int)(my_body * 1000.0f),
+                     (int)(mz_body * 1000.0f),
+                     (int)hdg_body,
+                     (unsigned long)m->reads_ok,
+                     (unsigned long)m->reads_err);
+          }
+
+#ifdef RATE_MONITOR_ENABLE
+          // 3. 採樣率遙測
+          float r_bmi_a = g_sampling_rate.bmi088_acc.rate_hz;
+          float r_bmi_g = g_sampling_rate.bmi088_gyro.rate_hz;
+          float r_adxl  = g_sampling_rate.adxl375.rate_hz;
+          float r_bmp   = g_sampling_rate.bmp388.rate_hz;
+          float r_mmc   = g_sampling_rate.mmc5983.rate_hz;
+          float r_gps   = g_sampling_rate.gps.rate_hz;
+
+          printf("[RATE] BMI088_A:%d.%02uHz, BMI088_G:%d.%02uHz, ADXL375:%d.%02uHz, BMP388:%d.%02uHz, MMC5983:%d.%02uHz, GPS:%d.%02uHz, SD_DET:%d, EKF_DROP:%lu\r\n",
+                 (int)r_bmi_a, (unsigned int)((r_bmi_a - (int)r_bmi_a) * 100.0f),
+                 (int)r_bmi_g, (unsigned int)((r_bmi_g - (int)r_bmi_g) * 100.0f),
+                 (int)r_adxl,  (unsigned int)((r_adxl  - (int)r_adxl)  * 100.0f),
+                 (int)r_bmp,   (unsigned int)((r_bmp   - (int)r_bmp)   * 100.0f),
+                 (int)r_mmc,   (unsigned int)((r_mmc   - (int)r_mmc)   * 100.0f),
+                 (int)r_gps,   (unsigned int)((r_gps   - (int)r_gps)   * 100.0f),
+                 (int)HAL_GPIO_ReadPin(SDIO_DET_GPIO_Port, SDIO_DET_Pin),
+                 (unsigned long)g_ekf_queue_drops);
+
+          // 4. W25Q128 Flash 記錄遙測
+          printf("[FLASH_RING] PKT_TOTAL:%lu ADDR:0x%06lX\r\n",
+                 FlashRing_GetPacketCount(), FlashRing_GetWriteAddr());
+
+          // 5. CPU 佔用率遙測
+          float r_ekf_cpu = EKF_GetCPUUsage();
+          printf("[CPU] MainTask+ISR:%d.%02u%%, EKFTask:%d.%02u%%\r\n",
+                 (int)g_main_task_cpu_usage, (unsigned int)((g_main_task_cpu_usage - (int)g_main_task_cpu_usage) * 100.0f),
+                 (int)r_ekf_cpu, (unsigned int)((r_ekf_cpu - (int)r_ekf_cpu) * 100.0f));
+#endif
+
+          // 6. IMU & High-G 原始數據用於方向對齊驗證
+          printf("[IMU] a[mG]:%d,%d,%d g[dps]:%d,%d,%d\r\n",
+                 (int)(imu_data.ax * 1000.0f),
+                 (int)(imu_data.ay * 1000.0f),
+                 (int)(imu_data.az * 1000.0f),
+                 (int)(imu_data.gx),
+                 (int)(imu_data.gy),
+                 (int)(imu_data.gz));
+          if (adxl375_ok) {
+              printf("[HIGHG] a[mG]:%d,%d,%d\r\n",
+                     (int)(highg_data.ax * 1000.0f),
+                     (int)(highg_data.ay * 1000.0f),
+                     (int)(highg_data.az * 1000.0f));
+          }
+
+          // 7. 電源監測遙測（REQ-SYS-01：板載 ADC 電池電壓採樣 + 遙測顯示）
+          printf("[PWR] bat:%dmV\r\n", (int)g_bat_voltage_mv);
+
+          // 8. LoRa 下行鏈路就緒狀態（433 透傳 / 920 SX126x）+ E80 init 診斷
+          {
+              int    e80_rd; uint8_t e80_busy, e80_rb0, e80_rb1, e80_gs;
+              LoRaE80_GetInitDiag(&e80_rd, &e80_busy, &e80_rb0, &e80_rb1, &e80_gs);
+              /* gs=0x22 → SX126x STBY_RC 正常; gs=0x00 → MISO接地; gs=0xFF → MISO浮空 */
+              printf("[LORA] 433:%s 920:%s | gs=0x%02X busy=%d rd=%d sw=0x%02X,0x%02X\r\n",
+                     lora433_ok ? "rdy" : "off",
+                     lora920_ok ? "rdy" : "off",
+                     e80_gs, (int)e80_busy, e80_rd, e80_rb0, e80_rb1);
+          }
+      }
+
+      tick++;
+      wake_tick += 20U;
+      osDelayUntil(wake_tick);
+  }
+}
+#endif
+
+#define CMD_BUFFER_SIZE 64
+static char g_cmd_buf[CMD_BUFFER_SIZE];
+static uint8_t g_cmd_idx = 0;
+
+void Parse_Serial_Command(const char* cmd) {
+    if (strncmp(cmd, "CMD_MAG_CAL:", 12) == 0) {
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        if (sscanf(cmd + 12, "%f,%f,%f", &cx, &cy, &cz) == 3) {
+            EKF_SaveMagCalibration(cx, cy, cz);
+        } else {
+            printf("[CAL] ERROR: Invalid mag cal command format\r\n");
+        }
+    }
+    else if (strncmp(cmd, "CMD_MAG_YAW_LOCK:", 17) == 0) {
+        int val = 0;
+        if (sscanf(cmd + 17, "%d", &val) == 1) {
+            g_mag_yaw_lock = (val != 0) ? 1 : 0;
+            printf("[CAL] EKF Mag Yaw Lock set to: %d\r\n", g_mag_yaw_lock);
+        }
+    }
+    else if (strcmp(cmd, "CMD_RESET_CAL") == 0) {
+        EKF_ResetCalibration();
+    }
+}
+
+void Poll_Serial_Commands(void) {
+    uint8_t rx_byte;
+    // Read all available bytes from USART2 (non-blocking, timeout = 0)
+    while (HAL_UART_Receive(&huart2, &rx_byte, 1, 0) == HAL_OK) {
+        if (rx_byte == '\n' || rx_byte == '\r') {
+            if (g_cmd_idx > 0) {
+                g_cmd_buf[g_cmd_idx] = '\0';
+                Parse_Serial_Command(g_cmd_buf);
+                g_cmd_idx = 0;
+            }
+        } else {
+            if (g_cmd_idx < CMD_BUFFER_SIZE - 1) {
+                g_cmd_buf[g_cmd_idx++] = (char)rx_byte;
+            } else {
+                g_cmd_idx = 0; // overflow reset
+            }
+        }
+    }
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1527,7 +1806,9 @@ void StartDefaultTask(void *argument)
    * USER_BT1 為上拉輸入 → 按下讀到 LOW (GPIO_PIN_RESET)。
    * 平時開機跳過 dump，可省下整顆 Flash 輸出 (~3–5 秒) 的初始化時間 (Item N)。 */
   if (HAL_GPIO_ReadPin(USER_BT1_GPIO_Port, USER_BT1_Pin) == GPIO_PIN_RESET) {
+      SPI3_Bus_Lock();          /* Flash_DumpAll 走 w25q128.c 自有 CS，須在呼叫端持 SPI3 鎖以與 E80 互斥 */
       Flash_DumpAll(&hspi3);
+      SPI3_Bus_Unlock();
   }
 
   /* 初始化採樣率監測器（Watch 視窗加入 g_sampling_rate 即可一次觀察全部 Hz） */
@@ -1645,8 +1926,13 @@ void StartDefaultTask(void *argument)
   HAL_IWDG_Refresh(&hiwdg);
 
   /* Infinite loop */
+  uint32_t wake_tick = osKernelGetTickCount();
+  static uint32_t main_task_accumulated_cycles = 0;
+  static uint32_t main_task_last_calc_tick = 0;
+  DWT_Init(); // Ensure DWT is initialized
   for(;;)
   {
+    uint32_t loop_start_cycles = DWT->CYCCNT;
     /* --- 餵狗 (Feed the independent watchdog) --- */
     HAL_IWDG_Refresh(&hiwdg);
 
@@ -1743,26 +2029,20 @@ void StartDefaultTask(void *argument)
             ay *= 9.80665f;
             az *= 9.80665f;
 
-            /* 改善項目 A：高G感測器切換 —— |a_bmi| > 20g（196 m/s²）時以 ADXL375（±200g）替換
-             * BMI088 最大量程 ±24g，超出後飽和；ADXL375 量程 ±200g，解析度 0.049g/LSB。
-             * 本迴圈以 ADXL batch（3200Hz，32筆/10ms）中對應時刻的樣本索引取代 BMI，
-             * i∈[0,9]→adxl_i=i×3∈[0,27]，近似 1ms 間距（精確 3200Hz/1000Hz=3.2）。
-             * 單位：ADXL 輸出為 g（×0.049），乘 9.80665 → m/s²，與 BMI 路徑一致。
-             * 偏差校正：EKF 校準期（發射台靜置 3s）以 BMI 資料計算 accel_bias；由於
-             * ADXL Z 與 BMI Z 方向一致（均感測重力 ≈ 9.81 m/s²），BMI bias 對 ADXL Z 軸
-             * 同樣適用（靜態時 accel_bias[2] ≈ 0）；ADXL X/Y 靜態偏置通常 < 50mg，
-             * 在 20g+ 環境可忽略。
-             * ⚠️ PCB X/Y 軸向對齊：BMI 與 ADXL 因板卡佈局 X/Y 反向可能不一致，需上板
-             * bench 驗證（旋轉火箭艙，確認 ADXL ax/ay 符號與 BMI 一致）；若方向相反，
-             * 於下方 ax/ay 各加負號（並加上 #define 以便開關）。 */
+            // 重映射至 body frame (X=右, Y=前, Z=上)，依 sensor_axis.h（唯一真相來源）。
+            // 輸入輸出可同變數：函式先以傳值複製 sx/sy/sz 再寫出，alias 安全。
+            sensor_imu_to_body(ax, ay, az, &ax, &ay, &az);
+
             if (adxl_hiG_avail) {
                 float a_mag_sq = ax*ax + ay*ay + az*az;
                 if (a_mag_sq > (20.0f * 9.80665f) * (20.0f * 9.80665f)) {  /* > 20g, 避免 sqrt */
-                    int adxl_i = i * 3;
+                    int adxl_i = (i * 16 + 2) / 5;
                     if (adxl_i > ADXL_BATCH_SIZE - 1) adxl_i = ADXL_BATCH_SIZE - 1;
-                    ax = g_adxl_batches[adxl_hiG_bidx][adxl_i].ax * 9.80665f;
-                    ay = g_adxl_batches[adxl_hiG_bidx][adxl_i].ay * 9.80665f;
-                    az = g_adxl_batches[adxl_hiG_bidx][adxl_i].az * 9.80665f;
+                    // ADXL375 重映射至同一 body frame，依 sensor_axis.h，與 BMI088 對齊以無縫替換。
+                    float hg_sx = g_adxl_batches[adxl_hiG_bidx][adxl_i].ax * 9.80665f;
+                    float hg_sy = g_adxl_batches[adxl_hiG_bidx][adxl_i].ay * 9.80665f;
+                    float hg_sz = g_adxl_batches[adxl_hiG_bidx][adxl_i].az * 9.80665f;
+                    sensor_highg_to_body(hg_sx, hg_sy, hg_sz, &ax, &ay, &az);
                 }
             }
 
@@ -1771,14 +2051,15 @@ void StartDefaultTask(void *argument)
             int gyro_idx = 2 * i;
             if (gyro_idx > 19) gyro_idx = 19;
 
-            float gx = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gx;
-            float gy = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gy;
-            float gz = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gz;
+            float sgx = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gx;
+            float sgy = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gy;
+            float sgz = g_bmi_gyro_batches[gyro_ready_idx][gyro_idx].gz;
 
-            // Convert to rad/s by multiplying by PI / 180.0f (since raw readings are in dps)
-            gx *= (M_PI / 180.0f);
-            gy *= (M_PI / 180.0f);
-            gz *= (M_PI / 180.0f);
+            // body 角速度 (rad/s)，與 accel 同一映射 (sensor_axis.h)。陀螺為 axial vector，
+            // 在 proper rotation (det=+1) 下與一般向量同變換，故直接套用 IMU 映射。
+            float gx, gy, gz;
+            sensor_imu_to_body(sgx * (M_PI / 180.0f), sgy * (M_PI / 180.0f), sgz * (M_PI / 180.0f),
+                               &gx, &gy, &gz);
 
             // 3. Assemble the sample
             EKF_Sample_t* p_sample = &g_ekf_buffers[g_ekf_active_idx].samples[g_ekf_sample_count];
@@ -1829,16 +2110,21 @@ void StartDefaultTask(void *argument)
         imu_data.accel_x_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_x_raw;
         imu_data.accel_y_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_y_raw;
         imu_data.accel_z_raw = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].accel_z_raw;
-        imu_data.ax          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ax;
-        imu_data.ay          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ay;
-        imu_data.az          = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].az;
+        
+        // 重映射至 body frame (sensor_axis.h)；與 EKF 饋入完全一致。
+        float raw_ax         = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ax;
+        float raw_ay         = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].ay;
+        float raw_az         = g_bmi_acc_batches[acc_ready_idx][BMI_ACC_BATCH_SIZE - 1].az;
+        sensor_imu_to_body(raw_ax, raw_ay, raw_az, &imu_data.ax, &imu_data.ay, &imu_data.az);
 
         imu_data.gyro_x_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_x_raw;
         imu_data.gyro_y_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_y_raw;
         imu_data.gyro_z_raw  = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gyro_z_raw;
-        imu_data.gx          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gx;
-        imu_data.gy          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gy;
-        imu_data.gz          = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
+        
+        float raw_gx         = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gx;
+        float raw_gy         = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gy;
+        float raw_gz         = g_bmi_gyro_batches[gyro_ready_idx][BMI_GYRO_BATCH_SIZE - 1].gz;
+        sensor_imu_to_body(raw_gx, raw_gy, raw_gz, &imu_data.gx, &imu_data.gy, &imu_data.gz);
 
         // 呼叫 FSM 狀態機進行 100Hz 定時狀態轉移判定
         FSM_Update();
@@ -1853,9 +2139,12 @@ void StartDefaultTask(void *argument)
         highg_data.x_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].x_raw;
         highg_data.y_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].y_raw;
         highg_data.z_raw = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].z_raw;
-        highg_data.ax    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ax;
-        highg_data.ay    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ay;
-        highg_data.az    = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].az;
+        
+        float raw_adxl_ax = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ax;
+        float raw_adxl_ay = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].ay;
+        float raw_adxl_az = g_adxl_batches[ready_idx][ADXL_BATCH_SIZE - 1].az;
+        sensor_highg_to_body(raw_adxl_ax, raw_adxl_ay, raw_adxl_az,
+                             &highg_data.ax, &highg_data.ay, &highg_data.az);
         
         // 提示：如需寫入 SD 卡，可在此處直接寫入整個 g_adxl_batches[ready_idx] 共 32 筆資料，即為 3.2 kHz HIL 實時存檔
     }
@@ -1878,15 +2167,19 @@ void StartDefaultTask(void *argument)
         }
     }
 
-    /* === MMC5983MA 地磁計 @ 10 Hz (每 100ms 一次 one-shot 量測，~3ms 阻塞) ===
-     * 地磁航向僅在發射台靜置階段用於 EKF yaw 修正，10Hz 已足夠；量測在 task context。 */
+    /* === MMC5983MA 地磁計 @ 100 Hz 軟體 I2C 讀取 (每 10ms 一次讀取暫存器) === */
+    if (mag_ok && (tick % 10 == 0)) {
+        MMC5983_Read_Continuous();
+    }
+
+    /* === MMC5983MA 地磁計 EKF 融合 @ 10 Hz (每 100ms 提交一次軟體濾波後的純淨磁場資料) === */
     if (mag_ok && (tick % 100 == 0)) {
-        if (MMC5983_Read() == HAL_OK) {
-            /* 提交 body-frame 磁場向量供 EKF 在發射台階段做 yaw 修正。
-             * 軸向假設與 IMU body frame 對齊；若 bench 測試航向反向，於此處對相應軸取負。 */
-            const MMC5983_Data_t *mg = MMC5983_GetData();
-            EKF_SubmitMag(mg->gauss[0], mg->gauss[1], mg->gauss[2]);
-        }
+        float mx = 0.0f, my = 0.0f, mz = 0.0f;
+        MMC5983_GetFilteredGauss(&mx, &my, &mz);
+        /* 重映射至 body frame (sensor_axis.h)：mag X->-Y, Y->-X, Z->-Z */
+        float mx_body, my_body, mz_body;
+        sensor_mag_to_body(mx, my, mz, &mx_body, &my_body, &mz_body);
+        EKF_SubmitMag(mx_body, my_body, mz_body);
     }
     /* 每 10 秒重做一次 SET/RESET 橋偏校準以補溫漂；飛行中不做（地磁融合僅限發射台）。 */
     if (mag_ok && !EKF_in_flight && (tick % 10000 == 0) && (tick > 0)) {
@@ -1922,32 +2215,54 @@ void StartDefaultTask(void *argument)
         ring_period_ms = 50;     /* 20 Hz (INIT/PAD) */
     }
     if (tick % ring_period_ms == 0) {
-        /* Flash Ring Buffer：將目前感測器數據打包寫入 */
+        /* Flash Ring Buffer：將目前感測器與估計數據打包為 80-byte 格式寫入 */
         FlashRingPacket_t ring_pkt = {0};
         ring_pkt.tick_ms     = HAL_GetTick();
+        
+        // 抓取系統開傘狀態旗標
+        uint8_t sys_flags = 0;
+        if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_13) == GPIO_PIN_SET) sys_flags |= 0x01; // 副傘已點火
+        if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000) sys_flags |= 0x02; // 主傘已釋放
+        ring_pkt.flags       = sys_flags;
+        
+        g_bat_voltage_mv = ADC_Read_Battery_mv();   /* 供 LoRa 遙測與 [PWR] 行讀取（唯一 ADC 讀取點，避免並發） */
+        ring_pkt.bat_voltage_mv = g_bat_voltage_mv;
+        
         ring_pkt.bmi_ax      = imu_data.accel_x_raw;
         ring_pkt.bmi_ay      = imu_data.accel_y_raw;
         ring_pkt.bmi_az      = imu_data.accel_z_raw;
         ring_pkt.bmi_gx      = imu_data.gyro_x_raw;
         ring_pkt.bmi_gy      = imu_data.gyro_y_raw;
         ring_pkt.bmi_gz      = imu_data.gyro_z_raw;
+        
         ring_pkt.adxl_x      = highg_data.x_raw;
         ring_pkt.adxl_y      = highg_data.y_raw;
         ring_pkt.adxl_z      = highg_data.z_raw;
-        ring_pkt.temperature = (int32_t)(baro_data.temperature * 100.0f);
-        ring_pkt.pressure    = (uint32_t)(baro_data.pressure);
-        ring_pkt.altitude_cm = (int32_t)(baro_data.altitude * 100.0f);
-        /* GPS 經緯度（×1e6 deg）：僅在有有效定位時填入，否則維持 0 */
+        
+        ring_pkt.baro_temp_c_x100 = (int16_t)(baro_data.temperature * 100.0f);
+        ring_pkt.baro_press_pa    = (uint32_t)(baro_data.pressure);
+        ring_pkt.baro_alt_cm      = (int32_t)(baro_data.altitude * 100.0f);
+        
+        EKF_State_t sd_ekf = EKF_GetState();
+        ring_pkt.ekf_pos_z_cm     = (int32_t)(sd_ekf.pos_z * 100.0f);
+        ring_pkt.ekf_vel_z_cms    = (int32_t)(sd_ekf.vel_z * 100.0f);
+        ring_pkt.ekf_q0           = sd_ekf.q[0];
+        ring_pkt.ekf_q1           = sd_ekf.q[1];
+        ring_pkt.ekf_q2           = sd_ekf.q[2];
+        ring_pkt.ekf_q3           = sd_ekf.q[3];
+        
         const GPS_Data_t *gps_pkt = GPS_GetData();
         if (gps_pkt->fix_valid) {
-            ring_pkt.gps_lat = gps_pkt->lat_1e6;
-            ring_pkt.gps_lon = gps_pkt->lon_1e6;
-        } else {
-            ring_pkt.gps_lat = 0;
-            ring_pkt.gps_lon = 0;
+            ring_pkt.gps_lat      = gps_pkt->lat_1e6;
+            ring_pkt.gps_lon      = gps_pkt->lon_1e6;
+            ring_pkt.gps_alt_m    = (int16_t)gps_pkt->altitude_m;
+            ring_pkt.gps_spd_cms  = (int16_t)(gps_pkt->speed_mps * 100.0f);
+            ring_pkt.gps_sats     = gps_pkt->satellites;
+            ring_pkt.gps_fix      = gps_pkt->fix_valid;
         }
+        
         ring_pkt.fsm_state   = (uint8_t)current_fsm_state;
-        ring_pkt.flags       = 0;
+        
         FlashRing_WritePacket(&ring_pkt);
     }
 
@@ -1969,38 +2284,7 @@ void StartDefaultTask(void *argument)
                (int)(baro_data.altitude * 100.0f));
     }
 
-    /* === 每 1000ms：1 Hz GPS 狀態遙測（NMEA 標準輸出多為 1Hz）===
-     * 經緯度以正負號 + 絕對值列印，避免「整數部為 0 但實際為負」時遺失負號。 */
-    if (tick % 1000 == 0) {
-        const GPS_Data_t *g = GPS_GetData();
-        char     lat_sign = (g->lat_1e6 < 0) ? '-' : '+';
-        char     lon_sign = (g->lon_1e6 < 0) ? '-' : '+';
-        uint32_t lat_abs  = (g->lat_1e6 < 0) ? (uint32_t)(-g->lat_1e6) : (uint32_t)g->lat_1e6;
-        uint32_t lon_abs  = (g->lon_1e6 < 0) ? (uint32_t)(-g->lon_1e6) : (uint32_t)g->lon_1e6;
-        printf("[GPS] fix:%d q:%d sat:%d %c%lu.%06lu,%c%lu.%06lu alt:%dm spd:%dcm/s stale:%d ok:%lu err:%lu\r\n",
-               (int)g->fix_valid,
-               (int)g->fix_quality,
-               (int)g->satellites,
-               lat_sign, (unsigned long)(lat_abs / 1000000U), (unsigned long)(lat_abs % 1000000U),
-               lon_sign, (unsigned long)(lon_abs / 1000000U), (unsigned long)(lon_abs % 1000000U),
-               (int)g->altitude_m,
-               (int)(g->speed_mps * 100.0f),
-               (int)GPS_IsStale(2000),
-               (unsigned long)g->sentences_ok,
-               (unsigned long)g->sentences_err);
 
-        /* 地磁計 1 Hz 診斷：磁場 (mGauss) 與粗略水平航向 (deg)。 */
-        if (mag_ok) {
-            const MMC5983_Data_t *m = MMC5983_GetData();
-            printf("[MAG] B[mG]:%d,%d,%d hdg:%d ok:%lu err:%lu\r\n",
-                   (int)(m->gauss[0] * 1000.0f),
-                   (int)(m->gauss[1] * 1000.0f),
-                   (int)(m->gauss[2] * 1000.0f),
-                   (int)m->heading_deg,
-                   (unsigned long)m->reads_ok,
-                   (unsigned long)m->reads_err);
-        }
-    }
 
     /* === 每 500ms 翻轉 LED 一次，形成溫和的 1 Hz 視覺心跳 (0.5s 亮 / 0.5s 暗) === */
     if (tick % 500 == 0) {
@@ -2033,23 +2317,29 @@ void StartDefaultTask(void *argument)
                           mag_ok ? GPIO_PIN_SET : GPIO_PIN_RESET);
     }
 
-#ifdef RATE_MONITOR_ENABLE
-    /* 每 1000ms 輸出一次各感測器實際採樣率，便於自動化測試腳本讀取與斷言分析 */
-    if (tick % 1000 == 0) {
-        printf("[RATE] BMI088_A:%uHz, BMI088_G:%uHz, ADXL375:%uHz, BMP388:%uHz, SD_DET:%d, EKF_DROP:%lu\r\n",
-               (unsigned int)g_sampling_rate.bmi088_acc.rate_hz,
-               (unsigned int)g_sampling_rate.bmi088_gyro.rate_hz,
-               (unsigned int)g_sampling_rate.adxl375.rate_hz,
-               (unsigned int)g_sampling_rate.bmp388.rate_hz,
-               (int)HAL_GPIO_ReadPin(SDIO_DET_GPIO_Port, SDIO_DET_Pin),
-               (unsigned long)g_ekf_queue_drops);
-        printf("[FLASH_RING] PKT_TOTAL:%lu ADDR:0x%06lX\r\n",
-               FlashRing_GetPacketCount(), FlashRing_GetWriteAddr());
+
+
+    uint32_t loop_end_cycles = DWT->CYCCNT;
+    uint32_t loop_elapsed_cycles = loop_end_cycles - loop_start_cycles;
+
+    uint32_t current_tick = HAL_GetTick();
+    if (main_task_last_calc_tick == 0) {
+        main_task_last_calc_tick = current_tick;
     }
-#endif
+    main_task_accumulated_cycles += loop_elapsed_cycles;
+    if (current_tick - main_task_last_calc_tick >= 1000) {
+        uint32_t elapsed_ms_time = current_tick - main_task_last_calc_tick;
+        uint32_t total_possible_cycles = elapsed_ms_time * (SystemCoreClock / 1000);
+        if (total_possible_cycles > 0) {
+            g_main_task_cpu_usage = (float)main_task_accumulated_cycles / (float)total_possible_cycles * 100.0f;
+        }
+        main_task_accumulated_cycles = 0;
+        main_task_last_calc_tick = current_tick;
+    }
 
     tick++;
-    osDelay(1); /* 1ms tick — 決定整體採樣基準 */
+    wake_tick += 1U;
+    osDelayUntil(wake_tick);
   }
   /* USER CODE END 5 */
 }

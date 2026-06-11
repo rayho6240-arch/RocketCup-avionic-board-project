@@ -100,7 +100,7 @@ extern "C" {
 #define FLASH_RINGBUF_END            0xFFFFFFUL  /* Ring Buffer 結束地址 */
 #define FLASH_RINGBUF_SIZE           0xFF0000UL  /* ~15.9 MB */
 
-#define FLASH_PACKET_SIZE            52UL        /* 每筆飛行數據封包大小 (bytes) */
+#define FLASH_PACKET_SIZE            80UL        /* 每筆飛行數據封包大小 (bytes) */
 #define FLASH_PACKET_RATE_HZ         20UL        /* 封包記錄頻率 (Hz) */
 /* 最大記錄時長：0xFF0000 / 52 / 20 = 15,312 秒 ≈ 255 分鐘 */
 

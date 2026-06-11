@@ -10,6 +10,7 @@
   ******************************************************************************
   */
 #include "gps.h"
+#include "rate_monitor.h"
 #include <string.h>
 
 /* NMEA 單句最長 82 字元（含 $ 與 CRLF）。緩衝留 96 充足餘量。 */
@@ -262,8 +263,46 @@ void GPS_Init(UART_HandleTypeDef *huart)
     gps_asm_len = 0;
     gps_line_ready = 0;
     gps_dma_old_pos = 0;
+
     if (gps_huart) {
-        /* 啟動 IDLE-line + 循環 DMA 接收（USART6_RX 已於 MSP __HAL_LINKDMA 連結 DMA2_Stream1）。 */
+        /* 1. 定義 UBX 設置指令 */
+        /* UBX-CFG-PRT: 設置 UART1 鮑率為 460800, 8N1, 輸入/輸出為 UBX+NMEA */
+        const uint8_t UBX_CFG_PRT_460800[] = {
+            0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 
+            0xD0, 0x08, 0x00, 0x00, 0x00, 0x08, 0x07, 0x00, 0x07, 0x00, 
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0xBC
+        };
+        
+        /* UBX-CFG-RATE: 設置定位頻率為 10 Hz (100ms 測量週期) */
+        const uint8_t UBX_CFG_RATE_10HZ[] = {
+            0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0x64, 0x00, 0x01, 0x00, 
+            0x01, 0x00, 0x7A, 0x12
+        };
+
+        /* 2. 動態鮑率協商序列 (嘗試以多種鮑率發送設置命令，以相容各類初始狀態) */
+        const uint32_t try_bauds[] = {38400, 115200, 9600};
+        for (int i = 0; i < 3; i++) {
+            /* 切換 MCU UART 至嘗試的鮑率 */
+            HAL_UART_DeInit(gps_huart);
+            gps_huart->Init.BaudRate = try_bauds[i];
+            HAL_UART_Init(gps_huart);
+            
+            /* 發送變更鮑率命令 */
+            HAL_UART_Transmit(gps_huart, (uint8_t*)UBX_CFG_PRT_460800, sizeof(UBX_CFG_PRT_460800), 50);
+            HAL_Delay(10);
+        }
+
+        /* 3. 將 MCU UART 固定於最終目標鮑率 460800 */
+        HAL_UART_DeInit(gps_huart);
+        gps_huart->Init.BaudRate = 460800;
+        HAL_UART_Init(gps_huart);
+        HAL_Delay(20);
+
+        /* 4. 在 460800 鮑率下，發送設置定位更新率為 10Hz 命明 */
+        HAL_UART_Transmit(gps_huart, (uint8_t*)UBX_CFG_RATE_10HZ, sizeof(UBX_CFG_RATE_10HZ), 50);
+        HAL_Delay(10);
+
+        /* 5. 啟動 IDLE-line + 循環 DMA 接收 */
         HAL_UARTEx_ReceiveToIdle_DMA(gps_huart, gps_dma_buf, GPS_DMA_BUF_SIZE);
     }
 }
@@ -286,9 +325,11 @@ uint8_t GPS_Update(void)
     if (nmea_is_type(line, "GGA")) {
         gps_parse_gga(line);
         gps_data.sentences_ok++;
+        RATE_TICK_GPS();
     } else if (nmea_is_type(line, "RMC")) {
         gps_parse_rmc(line);
         gps_data.sentences_ok++;
+        RATE_TICK_GPS();
     }
     /* 其他句型（GSV/GSA/VTG...）目前略過 */
     return 1;

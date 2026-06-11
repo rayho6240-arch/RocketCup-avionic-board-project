@@ -79,19 +79,26 @@ typedef struct {
 
 /* --- API --- */
 
-/* 綁定 I2C 並初始化：檢查 Product ID、軟體重置、設定頻寬、做一次 SET/RESET 橋偏校準。
- * 需在 MX_I2C1_Init() 之後呼叫一次。回傳 HAL_OK 表示晶片在線且校準完成。 */
-HAL_StatusTypeDef MMC5983_Init(I2C_HandleTypeDef *hi2c);
+/* 初始化軟體 I2C 並配置 MMC5983MA：檢查 Product ID、軟體重置、設定頻寬、做一次 SET/RESET 橋偏校準。
+ * 回傳 HAL_OK 表示晶片在線且校準完成。 */
+HAL_StatusTypeDef MMC5983_Init(void);
 
 /* SET/RESET 兩次量測，更新各軸橋路偏移 offset[]，結束時保持 SET 極性。
  * 建議每數秒呼叫一次以補償溫漂。 */
 HAL_StatusTypeDef MMC5983_Recalibrate(void);
 
-/* 觸發一次 TM_M 量測並讀取 18-bit X/Y/Z，扣除 offset[] 後更新 gauss[] 與 heading_deg。 */
+/* 觸發一次 TM_M 量測並讀取 18-bit X/Y/Z，扣除 offset[] 後更新 gauss[] 與 heading_deg（阻塞式）。 */
 HAL_StatusTypeDef MMC5983_Read(void);
 
 /* 取得最近一次量測結果（指向內部 static，唯讀）。 */
 const MMC5983_Data_t* MMC5983_GetData(void);
+
+/* 透過軟體 I2C 讀取最新的 7 位元組暫存器資料（適用於 100Hz 連續讀取，非阻塞）。 */
+HAL_StatusTypeDef MMC5983_Read_Continuous(void);
+
+/* 取得軟體低通濾波後的三軸磁力值 (Gauss)。 */
+void MMC5983_GetFilteredGauss(float *x, float *y, float *z);
+void MMC5983_SetOffsets(const float *offsets);
 
 #ifdef __cplusplus
 }

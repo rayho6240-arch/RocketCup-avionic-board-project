@@ -176,41 +176,109 @@ W25QXX_StatusTypeDef W25QXX_WaitForReady(uint32_t timeout_ms);
 void Flash_Test(void);
 
 /* ============================================================
- *  Flash 記憶體分區位址（W25Q128JV, 16 MB）
+ *  Flash 記憶體分區與雙軌備份規劃 (Design Philosophy)
+ * ============================================================
+ *  本航電系統採用 W25Q128JV (16 MB SPI Flash)，整體空間劃分為三大分區：
+ *  
+ *  1. 系統旗標區 (System Flags Sector): 0x000000 - 0x000FFF (4KB, Sector 0)
+ *     - 用於儲存地面的靜態偏置 (Calibration)、磁力計硬鐵偏置 (mag_offsets) 以及
+ *       開傘事件、斷電計數器等。
+ *     - 安全策略：為了防範 4KB Sector Erase 造成高頻感測器採樣 (1.6kHz~3.2kHz) 
+ *       與 EKF (100Hz) 迴圈中斷阻塞 (~400ms)，飛行過程中絕不擦除寫入 Sector 0。
+ *       僅在發射架靜止自檢校準、以及判定著陸成功 (STATE_LANDED) 後，才可進行擦除寫入。
+ *  
+ *  2. 任務總結區 (Mission Summary Sector): 0x001000 - 0x00FFFF (60KB, Sector 1 - 15)
+ *     - 採用結構體 FlashMissionSummary_t 記錄飛行過程的極值 (最高高度、速度、過載等)
+ *       與各狀態切換時間戳。
+ *     - 為避免飛行擦除，該區亦限制僅在判定著陸成功 (STATE_LANDED) 後進行一次性寫入。
+ *  
+ *  3. 飛行數據環形緩衝區 (Flight Ring Buffer): 0x010000 - 0xFFFFFF (~15.9 MB)
+ *     - 用於高頻記錄飛行中的姿態與感測器原始數據，不進行 Sector Erase，而是以 
+ *       Page Write (1.5ms，不阻塞主任務) 寫入。開機時預先擦除前 10 個 Sector，
+ *       並在寫入接近邊界時以背景滾動預擦方式確保寫入不被擦除阻塞。
  * ============================================================ */
 #define FLASH_RINGBUF_ADDR       0x010000UL   /* Ring Buffer 起始（64KB 對齊） */
 #define FLASH_RINGBUF_END        0xFFFFFFUL   /* Ring Buffer 結束 */
 #define FLASH_RINGBUF_SIZE       0xFF0000UL   /* ~15.9 MB */
-#define FLASH_RING_PACKET_SIZE   52UL         /* 每筆封包大小（bytes） */
-#define FLASH_RING_PREERASE_N    10           /* 開機預擦 Sector 數量（10×4KB = 40KB） */
+#define FLASH_RING_PACKET_SIZE   80UL         /* 每筆封包大小調整為 80 bytes */
+#define FLASH_RING_PREERASE_N    10           /* 開機預擦 Sector 數量 */
 
 /* ============================================================
- *  飛行數據封包（52 bytes, packed）
- *  magic[0..1] = 0xAA 0x55 作為環形掃描標記
- *  CRC-16/CCITT 覆蓋 bytes [0..49]，存在 bytes [50..51]
+ *  結構體定義
  * ============================================================ */
+
+/* 系統旗標區結構體 (62 Bytes) */
 typedef struct __attribute__((packed)) {
-    uint8_t  magic[2];       /* [0..1]   0xAA 0x55                */
-    uint16_t seq;            /* [2..3]   封包序號（滾動）          */
-    uint32_t tick_ms;        /* [4..7]   HAL_GetTick() ms          */
-    int16_t  bmi_ax;         /* [8..9]   BMI088 Accel X raw LSB    */
-    int16_t  bmi_ay;         /* [10..11] BMI088 Accel Y raw        */
-    int16_t  bmi_az;         /* [12..13] BMI088 Accel Z raw        */
-    int16_t  bmi_gx;         /* [14..15] BMI088 Gyro X raw         */
-    int16_t  bmi_gy;         /* [16..17] BMI088 Gyro Y raw         */
-    int16_t  bmi_gz;         /* [18..19] BMI088 Gyro Z raw         */
-    int16_t  adxl_x;         /* [20..21] ADXL375 X raw             */
-    int16_t  adxl_y;         /* [22..23] ADXL375 Y raw             */
-    int16_t  adxl_z;         /* [24..25] ADXL375 Z raw             */
-    int32_t  temperature;    /* [26..29] BMP388 temp ×100 (°C)     */
-    uint32_t pressure;       /* [30..33] BMP388 pressure (Pa)      */
-    int32_t  altitude_cm;    /* [34..37] altitude ×100 (cm)        */
-    int32_t  gps_lat;        /* [38..41] GPS lat ×1e6 (預留)       */
-    int32_t  gps_lon;        /* [42..45] GPS lon ×1e6 (預留)       */
-    uint8_t  fsm_state;      /* [46]     飛行狀態機 state           */
-    uint8_t  flags;          /* [47]     雜旗標                    */
-    uint16_t reserved;       /* [48..49] 保留                      */
-    uint16_t crc16;          /* [50..51] CRC-16/CCITT [0..49]      */
+    uint8_t  fsm_state;          /* [0] 飛行狀態機當前狀態 */
+    uint8_t  drogue_deployed;    /* [1] 副傘是否已部署 (1=是, 0=否) */
+    uint8_t  main_deployed;      /* [2] 主傘是否已部署 (1=是, 0=否) */
+    uint8_t  reboot_count;       /* [3] 空中斷電重啟次數計數 */
+    uint32_t drogue_time_ms;     /* [4..7] 副傘部署開機時間戳 (ms) */
+    uint32_t main_time_ms;       /* [8..11] 主傘部署開機時間戳 (ms) */
+    uint16_t bat_voltage_mv;     /* [12..13] 開機/發射時電池電壓 (mV) */
+    uint16_t self_test_errs;     /* [14..15] 開機感測器自檢錯誤碼 */
+    struct __attribute__((packed)) {
+        uint32_t magic;          /* magic = 0xC0DEB1A5 */
+        float    baro_launchpad; /* 發射台基準氣壓高度 */
+        float    accel_bias[3];  /* EKF 加速度計三軸偏置 (X, Y, Z) */
+        float    gyro_bias[3];   /* EKF 陀螺儀三軸偏置 (X, Y, Z) */
+    } calib;                     /* [16..47] 校準參數，對齊 FLASH_OFF_CALIB_PARAMS */
+    float    mag_offsets[3];     /* [48..59] MMC5983MA 地磁計三軸硬鐵偏置 (Gauss) */
+    uint16_t crc16;              /* [60..61] 整個結構的 CRC-16 校驗碼 */
+} FlashSysFlags_t;
+
+/* 任務總結區結構體 (98 Bytes) */
+typedef struct __attribute__((packed)) {
+    float    max_altitude;       /* [0..3] 飛行過程最高相對高度 (m) */
+    float    max_velocity;       /* [4..7] 飛行過程最大垂直速度 (m/s) */
+    float    max_accel_bmi;      /* [8..11] 主感測器 BMI088 最大合加速度 (g) */
+    float    max_accel_adxl;     /* [12..15] 高 G 感測器 ADXL375 最大合加速度 (g) */
+    uint32_t state_timestamps[8];/* [16..47] FSM 各狀態切換時間戳 (ms)，對齊 FLASH_OFF_STATE_TIMESTAMPS */
+    uint32_t flight_duration_ms; /* [48..51] 起飛至落地的總飛行時間 (ms)，對齊 FLASH_OFF_FLIGHT_DURATION */
+    float    drogue_altitude;    /* [52..55] 副傘實際開傘相對高度 (m) */
+    float    main_altitude;      /* [56..59] 主傘實際開傘相對高度 (m) */
+    uint8_t  flight_reboot_count;/* [60] 飛行中經歷的總斷電次數 */
+    uint8_t  reserved[3];        /* [61..63] 預留對齊 */
+    double   land_gps_lat;       /* [64..71] 落地點 GPS 緯度，對齊 FLASH_OFF_LAND_GPS_LAT */
+    double   land_gps_lon;       /* [72..79] 落地點 GPS 經度，對齊 FLASH_OFF_LAND_GPS_LON */
+    double   launch_gps_lat;     /* [80..87] 發射點 GPS 緯度 */
+    double   launch_gps_lon;     /* [88..95] 發射點 GPS 經度 */
+    uint16_t crc16;              /* [96..97] 整個結構的 CRC-16 校驗碼 */
+} FlashMissionSummary_t;
+
+/* 飛行數據環形緩衝區封包格式 (80 Bytes) */
+typedef struct __attribute__((packed)) {
+    uint8_t  magic[2];       /* [0..1]   0xAA 0x55 作為環形掃描標記 */
+    uint16_t seq;            /* [2..3]   封包序號（滾動） */
+    uint32_t tick_ms;        /* [4..7]   HAL_GetTick() ms */
+    uint8_t  fsm_state;      /* [8]      飛行狀態機 state */
+    uint8_t  flags;          /* [9]      系統狀態旗標 */
+    uint16_t bat_voltage_mv; /* [10..11] 電池電壓 (mV) */
+    int16_t  bmi_ax;         /* [12..13] BMI088 Accel X raw LSB */
+    int16_t  bmi_ay;         /* [14..15] BMI088 Accel Y raw */
+    int16_t  bmi_az;         /* [16..17] BMI088 Accel Z raw */
+    int16_t  bmi_gx;         /* [18..19] BMI088 Gyro X raw */
+    int16_t  bmi_gy;         /* [20..21] BMI088 Gyro Y raw */
+    int16_t  bmi_gz;         /* [22..23] BMI088 Gyro Z raw */
+    int16_t  adxl_x;         /* [24..25] ADXL375 X raw LSB */
+    int16_t  adxl_y;         /* [26..27] ADXL375 Y raw */
+    int16_t  adxl_z;         /* [28..29] ADXL375 Z raw */
+    int16_t  baro_temp_c_x100;/* [30..31] 氣壓計溫度 * 100 */
+    uint32_t baro_press_pa;  /* [32..35] 氣壓計壓力 (Pa) */
+    int32_t  baro_alt_cm;    /* [36..39] 氣壓計相對高度 (cm) */
+    int32_t  ekf_pos_z_cm;   /* [40..43] EKF 估計相對高度 (cm) */
+    int32_t  ekf_vel_z_cms;  /* [44..47] EKF 估計垂直速度 (cm/s) */
+    float    ekf_q0;         /* [48..51] EKF 四元數 q0 */
+    float    ekf_q1;         /* [52..55] EKF 四元數 q1 */
+    float    ekf_q2;         /* [56..59] EKF 四元數 q2 */
+    float    ekf_q3;         /* [60..63] EKF 四元數 q3 */
+    int32_t  gps_lat;        /* [64..67] GPS 緯度 (lat * 1e6) */
+    int32_t  gps_lon;        /* [68..71] GPS 經度 (lon * 1e6) */
+    int16_t  gps_alt_m;      /* [72..73] GPS 海拔高度 (m) */
+    int16_t  gps_spd_cms;    /* [74..75] GPS 地速 (cm/s) */
+    uint8_t  gps_sats;       /* [76]     GPS 衛星數 */
+    uint8_t  gps_fix;        /* [77]     GPS 定位品質 */
+    uint16_t crc16;          /* [78..79] CRC-16/CCITT */
 } FlashRingPacket_t;
 
 /* ============================================================
@@ -224,26 +292,42 @@ typedef struct __attribute__((packed)) {
 void FlashRing_Init(void);
 
 /**
- * @brief  寫入一筆 52-byte 飛行數據封包至環形緩衝區
- *         自動計算 CRC，當接近預擦邊界時進行滾動擦除（~200ms）
- * @param  pkt  封包指標（seq、tick 等由呼叫方填入，crc 由本函式計算）
+ * @brief  寫入一筆飛行數據封包至環形緩衝區
+ *         自動計算 CRC，當接近預擦邊界時進行滾動擦除
+ * @param  pkt  封包指標
  * @retval W25QXX_OK 或錯誤碼
  */
 W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt);
  
 /**
  * @brief  邊界安全地提取環形緩衝區中最後一筆寫入的有效數據封包
- *         用於空中重開機時恢復飛行狀態機
  * @param  pkt  輸出封包結構體
  * @retval W25QXX_OK 成功提取, W25QXX_ERR_ID 數據無效或未寫入
  */
 W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt);
+
+/**
+ * @brief  邊界安全地提取環形緩衝區中倒數第二筆寫入的有效數據封包，用於熱啟動差分速度估計
+ * @param  pkt  輸出封包結構體
+ * @retval W25QXX_OK 成功提取, W25QXX_ERR_ID 數據無效或未寫入
+ */
+W25QXX_StatusTypeDef FlashRing_GetSecondLastPacket(FlashRingPacket_t *pkt);
 
 /** @brief 取得目前寫入地址 */
 uint32_t FlashRing_GetWriteAddr(void);
 
 /** @brief 取得累計寫入封包數 */
 uint32_t FlashRing_GetPacketCount(void);
+
+/** @brief 公用 CRC-16/CCITT 計算函數 */
+uint16_t ring_crc16(const uint8_t *data, uint16_t len);
+
+/* ============================================================
+ *  靜態區 (Sector 0 / Sector 1-15) 讀寫 API
+ * ============================================================ */
+W25QXX_StatusTypeDef Flash_WriteSysFlags(FlashSysFlags_t *flags);
+W25QXX_StatusTypeDef Flash_ReadSysFlags(FlashSysFlags_t *flags);
+W25QXX_StatusTypeDef Flash_WriteMissionSummary(FlashMissionSummary_t *summary);
 
 #ifdef __cplusplus
 }

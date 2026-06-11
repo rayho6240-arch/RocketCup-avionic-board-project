@@ -45,12 +45,15 @@ extern osMessageQueueId_t xEKFQueue;
 // Public EKF Status Flags for FSM Synchronization
 extern uint8_t EKF_calibrated;
 extern uint8_t EKF_in_flight;
+extern uint8_t g_mag_yaw_lock;
 
 // Public functions
 void DWT_Init(void);
 uint32_t DWT_GetMicroseconds(void);
 
+void EKF_Task(void *argument);
 void EKF_Init(void);
+void EKF_ResetOrientation(void);
 void EKF_Predict(float ax, float ay, float az, float dt);
 void EKF_UpdateBaro(float baro_alt);
 void EKF_UpdateBaroDelayed(float baro_alt, float z_pred);
@@ -71,8 +74,13 @@ void EKF_SubmitGPS(int32_t lat_1e6, int32_t lon_1e6, uint8_t satellites);
  * 收斂，於呼叫端對相應軸取負號即可。 */
 void EKF_SubmitMag(float mx, float my, float mz);
 
+float EKF_GetCPUUsage(void);
 EKF_State_t EKF_GetState(void);
 
-void EKF_Task(void *argument);
+void EKF_SaveCalibrationToFlash(void);
+void EKF_LoadCalibrationFromFlash(void);
+void EKF_HotRestartRestore(float last_altitude, float est_vel_z, const float *last_q);
+void EKF_ResetCalibration(void);
+void EKF_SaveMagCalibration(float cx, float cy, float cz);
 
 #endif /* CORE_INC_EKF_H_ */

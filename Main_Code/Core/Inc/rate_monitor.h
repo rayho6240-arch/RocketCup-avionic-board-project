@@ -48,6 +48,8 @@ typedef struct {
     RateMonitor_t bmi088_gyro; /**< BMI088 Gyro 實測採樣率 */
     RateMonitor_t adxl375;     /**< ADXL375 (High-G Accel) 實測採樣率 */
     RateMonitor_t bmp388;      /**< BMP388  (Baro + Temp)  實測採樣率 */
+    RateMonitor_t mmc5983;     /**< MMC5983MA Magnetometer 實測採樣率 */
+    RateMonitor_t gps;         /**< GPS NMEA 實測採樣率 */
 } SamplingRateAll_t;
 
 /** 全域實例 —— 宣告於 main.c，extern 供其他檔案參考 */
@@ -83,6 +85,8 @@ static inline void RateMonitor_Tick(RateMonitor_t *mon)
     RateMonitor_Init(&g_sampling_rate.bmi088_gyro); \
     RateMonitor_Init(&g_sampling_rate.adxl375); \
     RateMonitor_Init(&g_sampling_rate.bmp388);  \
+    RateMonitor_Init(&g_sampling_rate.mmc5983); \
+    RateMonitor_Init(&g_sampling_rate.gps);     \
 } while(0)
 
 /** 每次成功讀取後呼叫對應的 TICK */
@@ -91,6 +95,8 @@ static inline void RateMonitor_Tick(RateMonitor_t *mon)
 #define RATE_TICK_BMI088()        RATE_TICK_BMI088_GYRO() /* Backward compatibility */
 #define RATE_TICK_ADXL375()       RateMonitor_Tick(&g_sampling_rate.adxl375)
 #define RATE_TICK_BMP388()        RateMonitor_Tick(&g_sampling_rate.bmp388)
+#define RATE_TICK_MMC5983()       RateMonitor_Tick(&g_sampling_rate.mmc5983)
+#define RATE_TICK_GPS()           RateMonitor_Tick(&g_sampling_rate.gps)
 
 /* ============================================================
  *  停用路徑：所有巨集展開為空，完全零開銷
@@ -104,6 +110,8 @@ static inline void RateMonitor_Tick(RateMonitor_t *mon)
 #define RATE_TICK_BMI088()        /* rate_monitor disabled */
 #define RATE_TICK_ADXL375()       /* rate_monitor disabled */
 #define RATE_TICK_BMP388()        /* rate_monitor disabled */
+#define RATE_TICK_MMC5983()       /* rate_monitor disabled */
+#define RATE_TICK_GPS()           /* rate_monitor disabled */
 
 #endif  /* RATE_MONITOR_ENABLE */
 

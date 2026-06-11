@@ -17,6 +17,7 @@
 /* USER CODE END Header */
 
 #include "w25qxx.h"
+#include "spi3_bus.h"   /* SPI3 與 E80 920MHz LoRa 共用，CS 期間須持互斥鎖 */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,8 +25,13 @@
 /* ============================================================
  *  私有巨集
  * ============================================================ */
-#define CS_LOW()   HAL_GPIO_WritePin(W25QXX_CS_GPIO_PORT, W25QXX_CS_GPIO_PIN, GPIO_PIN_RESET)
-#define CS_HIGH()  HAL_GPIO_WritePin(W25QXX_CS_GPIO_PORT, W25QXX_CS_GPIO_PIN, GPIO_PIN_SET)
+/* CS_LOW 前取得 SPI3 匯流排、CS_HIGH 後釋放：保證 Flash 在 CS 拉低的整段交易期間
+ * 獨佔 SPI3，與 E80 920MHz LoRa 互斥（見 spi3_bus.h）。兩 macro 在每個函式內成對使用，
+ * 鎖為遞迴+優先級繼承；mutex 建立前 (pre-scheduler) Lock/Unlock 為 no-op。 */
+#define CS_LOW()   do { SPI3_Bus_Lock(); \
+                        HAL_GPIO_WritePin(W25QXX_CS_GPIO_PORT, W25QXX_CS_GPIO_PIN, GPIO_PIN_RESET); } while (0)
+#define CS_HIGH()  do { HAL_GPIO_WritePin(W25QXX_CS_GPIO_PORT, W25QXX_CS_GPIO_PIN, GPIO_PIN_SET); \
+                        SPI3_Bus_Unlock(); } while (0)
 
 /* BUSY bit 等待逾時 (一般寫入) */
 #define W25QXX_WRITE_TIMEOUT_MS     500U
@@ -447,7 +453,7 @@ static uint32_t s_ring_erased_end   = FLASH_RINGBUF_ADDR;  /* 預擦區終止地
 static uint32_t s_ring_packet_count = 0;
 static uint16_t s_ring_seq          = 0;
 
-static uint16_t ring_crc16(const uint8_t *data, uint16_t len)
+uint16_t ring_crc16(const uint8_t *data, uint16_t len)
 {
     uint16_t crc = 0xFFFF;
     for (uint16_t i = 0; i < len; i++) {
@@ -535,7 +541,7 @@ W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
         if (s_ring_erased_end > FLASH_RINGBUF_END + 1) s_ring_erased_end = FLASH_RINGBUF_ADDR;
     }
 
-    /* 填入欄位，計算 CRC（覆蓋 bytes [0..49]） */
+    /* 填入欄位，計算 CRC（覆蓋 bytes [0..77]） */
     pkt->magic[0] = 0xAA;
     pkt->magic[1] = 0x55;
     pkt->seq      = s_ring_seq++;
@@ -587,10 +593,100 @@ W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt)
     W25QXX_StatusTypeDef ret = W25QXX_ReadData(last_packet_addr, (uint8_t*)pkt, FLASH_RING_PACKET_SIZE);
     if (ret != W25QXX_OK) return ret;
 
-    // 校驗魔術字節與數據完整性
+    // 校報魔術字節與數據完整性 (CRC-16)
     if (pkt->magic[0] == 0xAA && pkt->magic[1] == 0x55) {
-        return W25QXX_OK;
+        uint16_t calc = ring_crc16((const uint8_t *)pkt, FLASH_RING_PACKET_SIZE - 2);
+        if (calc == pkt->crc16) {
+            return W25QXX_OK;
+        }
     }
 
     return W25QXX_ERR_ID; // 若尚未有任何有效寫入，回傳 ID 錯誤
+}
+
+W25QXX_StatusTypeDef FlashRing_GetSecondLastPacket(FlashRingPacket_t *pkt)
+{
+    if (pkt == NULL) return W25QXX_ERR_PARAM;
+
+    uint32_t last_write_addr = s_ring_write_addr;
+    uint32_t last_packet_addr;
+
+    // 處理環形邊界 wrap-around
+    if (last_write_addr == FLASH_RINGBUF_ADDR) {
+        last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
+    } else {
+        last_packet_addr = last_write_addr - FLASH_RING_PACKET_SIZE;
+    }
+
+    uint32_t second_last_packet_addr;
+    if (last_packet_addr == FLASH_RINGBUF_ADDR) {
+        second_last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
+    } else {
+        second_last_packet_addr = last_packet_addr - FLASH_RING_PACKET_SIZE;
+    }
+
+    // 從 Flash 中讀取倒數第二個封包
+    W25QXX_StatusTypeDef ret = W25QXX_ReadData(second_last_packet_addr, (uint8_t*)pkt, FLASH_RING_PACKET_SIZE);
+    if (ret != W25QXX_OK) return ret;
+
+    // 校驗魔術字節與數據完整性 (CRC-16)
+    if (pkt->magic[0] == 0xAA && pkt->magic[1] == 0x55) {
+        uint16_t calc = ring_crc16((const uint8_t *)pkt, FLASH_RING_PACKET_SIZE - 2);
+        if (calc == pkt->crc16) {
+            return W25QXX_OK;
+        }
+    }
+
+    return W25QXX_ERR_ID; // 若尚未有任何有效寫入，回傳 ID 錯誤
+}
+
+/* ============================================================
+ *  靜態區 (Sector 0 / Sector 1-15) 讀寫實作
+ * ============================================================ */
+
+W25QXX_StatusTypeDef Flash_WriteSysFlags(FlashSysFlags_t *flags)
+{
+    if (flags == NULL) return W25QXX_ERR_PARAM;
+
+    // 1. 計算並填充 CRC16 (覆蓋前 60 bytes)
+    flags->crc16 = ring_crc16((const uint8_t *)flags, sizeof(FlashSysFlags_t) - 2);
+
+    // 2. 擦除 Sector 0 (4KB) —— 警告：此操作會阻塞約 300ms
+    W25QXX_StatusTypeDef ret = W25QXX_EraseSector(0x000000UL);
+    if (ret != W25QXX_OK) return ret;
+
+    // 3. 寫入資料
+    return W25QXX_WriteData(0x000000UL, (const uint8_t *)flags, sizeof(FlashSysFlags_t));
+}
+
+W25QXX_StatusTypeDef Flash_ReadSysFlags(FlashSysFlags_t *flags)
+{
+    if (flags == NULL) return W25QXX_ERR_PARAM;
+
+    // 1. 讀取 Sector 0 開頭資料
+    W25QXX_StatusTypeDef ret = W25QXX_ReadData(0x000000UL, (uint8_t *)flags, sizeof(FlashSysFlags_t));
+    if (ret != W25QXX_OK) return ret;
+
+    // 2. 驗證 CRC16
+    uint16_t calc = ring_crc16((const uint8_t *)flags, sizeof(FlashSysFlags_t) - 2);
+    if (calc != flags->crc16) {
+        return W25QXX_ERR_ID; // CRC 校驗失敗，可能尚未校準或資料損毀
+    }
+
+    return W25QXX_OK;
+}
+
+W25QXX_StatusTypeDef Flash_WriteMissionSummary(FlashMissionSummary_t *summary)
+{
+    if (summary == NULL) return W25QXX_ERR_PARAM;
+
+    // 1. 計算並填充 CRC16 (覆蓋前 96 bytes)
+    summary->crc16 = ring_crc16((const uint8_t *)summary, sizeof(FlashMissionSummary_t) - 2);
+
+    // 2. 擦除 Sector 1 (4KB)
+    W25QXX_StatusTypeDef ret = W25QXX_EraseSector(0x001000UL);
+    if (ret != W25QXX_OK) return ret;
+
+    // 3. 寫入資料
+    return W25QXX_WriteData(0x001000UL, (const uint8_t *)summary, sizeof(FlashMissionSummary_t));
 }

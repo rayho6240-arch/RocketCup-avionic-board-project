@@ -1,0 +1,135 @@
+/**
+ ******************************************************************************
+ * @file    telemetry.c
+ * @brief   共用二進制下行遙測封包打包器 (binary + CRC16)
+ *
+ * 由現有感測器 / EKF / 系統全域組裝一筆 TelemetryPacket_t（見 telemetry.h 欄位契約），
+ * 結尾補 CRC-16/CCITT-FALSE。E22(433) 與 E80(920) 兩條鏈路發送同一份位元組。
+ ******************************************************************************
+ */
+#include "telemetry.h"
+#include "main.h"
+
+#include "bmi088.h"
+#include "adxl375.h"
+#include "bmp388.h"
+#include "ekf.h"
+#include "gps.h"
+#include "mmc5983.h"
+#include "sensor_axis.h"
+
+#include <string.h>
+
+/* --- 來自 main.c 的系統全域（背景任務更新，遙測唯讀） --- */
+extern BMI088_Data_t     imu_data;
+extern ADXL375_Data_t    highg_data;
+extern BMP388_Data_t     baro_data;
+extern FlightState_t     current_fsm_state;
+extern volatile float    g_main_task_cpu_usage;
+extern volatile uint16_t g_bat_voltage_mv;   /* 飛控迴圈更新的最新電池電壓 (mV) */
+extern uint8_t           adxl375_ok;
+extern uint8_t           mag_ok;
+extern uint8_t           sd_logging_active;
+extern TIM_HandleTypeDef htim4;              /* PWM_Servo（主傘舵機）CH3 */
+
+/* float → int16 飽和轉換，避免大數值 wrap 成錯誤負值 */
+static int16_t sat_i16(float v)
+{
+    if (v >  32767.0f) return  32767;
+    if (v < -32768.0f) return -32768;
+    return (int16_t)v;
+}
+
+uint16_t telem_crc16(const uint8_t *data, uint16_t len)
+{
+    uint16_t crc = 0xFFFFu;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t b = 0; b < 8; b++) {
+            if (crc & 0x8000u) crc = (uint16_t)((crc << 1) ^ 0x1021u);
+            else               crc = (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+uint16_t Telemetry_Build(uint8_t *out)
+{
+    static uint8_t s_seq = 0;
+    TelemetryPacket_t pkt;
+
+    pkt.sync0     = TELEM_SYNC0;
+    pkt.sync1     = TELEM_SYNC1;
+    pkt.seq       = s_seq++;
+    pkt.fsm_state = (uint8_t)current_fsm_state;
+    pkt.tick_ms   = HAL_GetTick();
+
+    /* --- EKF 狀態（高度 / 速度 / 姿態四元數） --- */
+    EKF_State_t ekf = EKF_GetState();
+    pkt.ekf_pos_z_cm  = (int32_t)(ekf.pos_z * 100.0f);
+    pkt.ekf_vel_z_cms = (int32_t)(ekf.vel_z * 100.0f);
+    pkt.ekf_q0 = sat_i16(ekf.q[0] * 10000.0f);
+    pkt.ekf_q1 = sat_i16(ekf.q[1] * 10000.0f);
+    pkt.ekf_q2 = sat_i16(ekf.q[2] * 10000.0f);
+    pkt.ekf_q3 = sat_i16(ekf.q[3] * 10000.0f);
+
+    /* --- 氣壓計 --- */
+    pkt.baro_alt_cm   = (int32_t)(baro_data.altitude * 100.0f);
+    pkt.baro_press_pa = (uint32_t)(baro_data.pressure);
+
+    /* --- BMI088 加速度 (mg) / 角速度 (dps)，sensor frame --- */
+    pkt.imu_ax_mg  = sat_i16(imu_data.ax * 1000.0f);
+    pkt.imu_ay_mg  = sat_i16(imu_data.ay * 1000.0f);
+    pkt.imu_az_mg  = sat_i16(imu_data.az * 1000.0f);
+    pkt.gyro_x_dps = sat_i16(imu_data.gx);
+    pkt.gyro_y_dps = sat_i16(imu_data.gy);
+    pkt.gyro_z_dps = sat_i16(imu_data.gz);
+
+    /* --- ADXL375 高G (cg = 0.01g)，sensor frame；±200g 量程故用 cg 以免 int16 溢位 --- */
+    if (adxl375_ok) {
+        pkt.hg_ax_cg = sat_i16(highg_data.ax * 100.0f);
+        pkt.hg_ay_cg = sat_i16(highg_data.ay * 100.0f);
+        pkt.hg_az_cg = sat_i16(highg_data.az * 100.0f);
+    } else {
+        pkt.hg_ax_cg = pkt.hg_ay_cg = pkt.hg_az_cg = 0;
+    }
+
+    /* --- MMC5983 磁場 (mGauss)，重映射至 body frame（與診斷 [MAG] 同來源） --- */
+    if (mag_ok) {
+        const MMC5983_Data_t *m = MMC5983_GetData();
+        float mx, my, mz;
+        sensor_mag_to_body(m->gauss[0], m->gauss[1], m->gauss[2], &mx, &my, &mz);
+        pkt.mag_x_mg = sat_i16(mx * 1000.0f);
+        pkt.mag_y_mg = sat_i16(my * 1000.0f);
+        pkt.mag_z_mg = sat_i16(mz * 1000.0f);
+    } else {
+        pkt.mag_x_mg = pkt.mag_y_mg = pkt.mag_z_mg = 0;
+    }
+
+    /* --- GPS --- */
+    const GPS_Data_t *g = GPS_GetData();
+    pkt.gps_lat_1e6 = g->lat_1e6;
+    pkt.gps_lon_1e6 = g->lon_1e6;
+    pkt.gps_alt_m   = sat_i16(g->altitude_m);
+    pkt.gps_sats    = g->satellites;
+    pkt.gps_fix     = g->fix_valid;
+
+    /* --- 電源 / CPU 佔用率 --- */
+    pkt.bat_mv       = g_bat_voltage_mv;
+    pkt.cpu_main_x10 = (uint16_t)(g_main_task_cpu_usage * 10.0f);
+    pkt.cpu_ekf_x10  = (uint16_t)(EKF_GetCPUUsage() * 10.0f);
+
+    /* --- 系統旗標 --- */
+    uint8_t flags = 0;
+    if (HAL_GPIO_ReadPin(FIRE_GPIO_Port, FIRE_Pin) == GPIO_PIN_SET)   flags |= TELEM_FLAG_DROGUE_FIRED;
+    if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000)         flags |= TELEM_FLAG_MAIN_DEPLOYED;
+    if (sd_logging_active)                                            flags |= TELEM_FLAG_SD_ACTIVE;
+    if (GPS_IsStale(2000))                                            flags |= TELEM_FLAG_GPS_STALE;
+    pkt.flags = flags;
+
+    /* --- CRC16 覆蓋除最後 2 bytes(crc16 本身) 外的全部內容 --- */
+    pkt.crc16 = telem_crc16((const uint8_t *)&pkt, (uint16_t)(sizeof(pkt) - 2));
+
+    memcpy(out, &pkt, sizeof(pkt));
+    return (uint16_t)sizeof(pkt);
+}

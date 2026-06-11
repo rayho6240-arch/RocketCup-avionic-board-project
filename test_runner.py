@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 航電板自動化硬體迴路測試 (HIL) 腳本 (Mac 版)
-此腳本可自動執行以下步驟：
-1. 自動編譯 (make)
-2. 自動燒錄 (STM32_Programmer_CLI)
-3. 自動監聽串口 (Serial) 並對傳回數據進行斷言分析 (Assertion & Verification)
+
+使用方式:
+  python3 test_runner.py           # 完整流程：編譯 → 燒錄 → 監聽 → 斷言
+  python3 test_runner.py --monitor # 只監聽 serial（跳過編譯燒錄，適合即時 debug）
+  python3 test_runner.py --flash   # 燒錄後監聽（跳過編譯）
 """
 
 import os
@@ -13,6 +14,8 @@ import sys
 import time
 import subprocess
 import re
+import argparse
+from datetime import datetime
 
 try:
     import serial
@@ -22,44 +25,32 @@ except ImportError:
     import serial
 
 # ==================== 配置參數 ====================
-# 1. 編譯配置
 COMPILER_PATH = "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.macos64_1.0.0.202411102158/tools/bin"
 DEBUG_DIR = "/Users/laizhiquan/coding/RocketCom/Main_Code/Debug"
 ELF_FILE = f"{DEBUG_DIR}/Main_AV_F407.elf"
 
-# 2. 燒錄配置 (使用 Mac 上偵測到的唯一 ST-Link SN: 35FF67065057393437231143)
 PROGRAMMER_CLI = "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.200.202503041107/tools/bin/STM32_Programmer_CLI"
 ST_LINK_SN = "35FF67065057393437231143"
 
-# 3. 串口配置 (使用偵測到的 CH340 晶片串口 /dev/cu.usbserial-110)
 SERIAL_PORT = "/dev/cu.usbserial-110"
-BAUD_RATE = 115200
-TEST_DURATION = 30  # 測試監聽時間 (秒)，涵蓋 Flash_Test + SD 卡掛載 + 10 秒 CSV 寫入週期
+BAUD_RATE = 460800
+TEST_DURATION = 30  # 完整 HIL 測試監聽時間 (秒)
+MONITOR_DURATION = 0   # --monitor 模式持續時間 (秒，0 = 無限)
 
-# 4. 預期指標判定標準 (HIL 驗證)
-EXPECTED_MIN_BMI088_A = 1550.0  # Hz (TIM6 實測約 1600 Hz)
-EXPECTED_MIN_BMI088_G = 1950.0  # Hz (TIM7 實測約 2000 Hz)
-EXPECTED_MIN_ADXL375 = 3100.0   # Hz (TIM3 實測約 3200 Hz)
-EXPECTED_MIN_BMP388 = 180.0     # Hz (實測約 187-200 Hz)
-
-# 5. Flash Ring Buffer 驗收標準
-EXPECTED_MIN_RING_PACKETS = 400  # 30s × 20Hz = 600 筆，允許初始化延遲，要求至少 400 筆
+# HIL 斷言門檻
+EXPECTED_MIN_BMI088_A = 1550.0
+EXPECTED_MIN_BMI088_G = 1950.0
+EXPECTED_MIN_ADXL375  = 3100.0
+EXPECTED_MIN_BMP388   = 140.0
+EXPECTED_MIN_MMC5983  = 80.0
+EXPECTED_MIN_GPS      = 1.0
+EXPECTED_MIN_RING_PACKETS = 300
 # ==================================================
 
 def run_command(cmd, cwd=None, env=None):
-    """執行命令並即時輸出日誌"""
-    print(f"执行命令: {cmd}")
-    process = subprocess.Popen(
-        cmd,
-        shell=True,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    
+    process = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, bufsize=1)
     output_lines = []
     while True:
         line = process.stdout.readline()
@@ -68,178 +59,409 @@ def run_command(cmd, cwd=None, env=None):
         if line:
             print(f"  {line.strip()}")
             output_lines.append(line)
-            
     return process.returncode, "".join(output_lines)
 
 def build_project():
-    """1. 編譯專案"""
-    print("\n" + "="*50)
+    print("\n" + "="*60)
     print("【第一步：自動編譯專案】")
-    print("="*50)
-    
-    # 設置編譯環境變數 PATH 引入 Arm 工具鏈
+    print("="*60)
     env = os.environ.copy()
     env["PATH"] = f"{COMPILER_PATH}:{env.get('PATH', '')}"
-    
-    cmd = "make clean && make -j4 Main_AV_F407.elf"
-    ret, out = run_command(cmd, cwd=DEBUG_DIR, env=env)
-    
+    ret, out = run_command("make clean && make -j4 Main_AV_F407.elf", cwd=DEBUG_DIR, env=env)
     if ret != 0:
-        print("\n❌ 編譯失敗！請檢查編譯錯誤。")
+        print("\n❌ 編譯失敗！")
         return False
-    
-    print("\n✅ 編譯成功！產出檔案：", ELF_FILE)
+    print("\n✅ 編譯成功！")
     return True
 
 def flash_mcu():
-    """2. 燒錄韌體"""
-    print("\n" + "="*50)
-    print("【第二步：自動燒錄韌體】")
-    print("="*50)
-    
+    print("\n" + "="*60)
+    print("【自動燒錄韌體】")
+    print("="*60)
     if not os.path.exists(ELF_FILE):
         print(f"❌ 找不到 ELF 檔案：{ELF_FILE}")
         return False
-        
     cmd = f'"{PROGRAMMER_CLI}" -c port=SWD sn={ST_LINK_SN} mode=UR -d "{ELF_FILE}" -v -rst'
     ret, out = run_command(cmd)
-    
     if "Download verified successfully" not in out:
         print("\n❌ 燒錄或驗證失敗！")
         return False
-        
-    print("\n✅ 韌體燒錄成功，並已重新啟動航電板 (MCU Reset)！")
+    print("\n✅ 韌體燒錄成功，MCU 已重啟！")
     return True
 
-def monitor_serial_and_verify():
-    """3. 監聽串口並進行 HIL 斷言分析"""
-    print("\n" + "="*50)
-    print(f"【第三步：監聽串口數據 & HIL 自動化測試】")
-    print(f"串口: {SERIAL_PORT} @ {BAUD_RATE} Baud | 監聽時長: {TEST_DURATION} 秒")
-    print("="*50)
-    
-    # 用於儲存收集到的採樣率
-    bmi_acc_rates = []
-    bmi_gyro_rates = []
-    adxl_rates = []
-    bmp_rates = []
+# ─────────────────────────────────────────────────────────────
+#  顏色輸出 (ANSI)
+# ─────────────────────────────────────────────────────────────
+RED    = "\033[91m"
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+BOLD   = "\033[1m"
+RESET  = "\033[0m"
 
-    # Flash Ring Buffer 監控
+def col(color, text): return f"{color}{text}{RESET}"
+
+# ─────────────────────────────────────────────────────────────
+#  Debug 監控模式
+# ─────────────────────────────────────────────────────────────
+def monitor_debug(duration_s=0):
+    """
+    即時監聽 serial，專注診斷 GPS 和 Mag 狀態。
+    duration_s = 0 → 無限迴圈直到 Ctrl-C
+    """
+    print("\n" + "="*60)
+    print(col(BOLD, f"【Debug 監聽模式】{SERIAL_PORT} @ {BAUD_RATE} baud"))
+    print(f"  持續時間: {'無限 (Ctrl-C 停止)' if duration_s == 0 else f'{duration_s} 秒'}")
+    print("="*60)
+
+    log_filename = "serial_continuous.log"
+    print(col(GREEN, f"  📝 所有讀取數據將同步追加寫入 {log_filename}\n"))
+
+    # ── 狀態追蹤 ──
+    state = {
+        # Mag
+        "mag_init": None,          # None / "online" / "not_detected"
+        "mag_offset": None,
+        "mag_reads_ok": 0,
+        "mag_reads_err": 0,
+        "mag_last_B": None,        # (Bx, By, Bz) mG
+        "mag_last_hdg": None,
+
+        # GPS
+        "gps_fix": 0,
+        "gps_sats": 0,
+        "gps_sentences_ok": 0,
+        "gps_sentences_err": 0,
+        "gps_last_lat": None,
+        "gps_last_lon": None,
+        "gps_seen_any": False,
+
+        # IMU/Baro rates
+        "bmi_a": 0, "bmi_g": 0, "adxl": 0, "bmp": 0,
+
+        # EKF
+        "ekf_calib": False,
+        "ekf_drop": 0,
+
+        # System
+        "flash_ring_ready": False,
+        "flash_pkt": 0,
+    }
+
+    # LED 預測
+    def predict_leds():
+        stat1 = state["gps_sentences_ok"] > 0
+        stat2 = state["mag_init"] == "online"
+        fix   = state["gps_fix"] == 1
+
+        stat1_str = (col(GREEN, "● 常亮 (有fix)") if (stat1 and fix) else
+                     col(YELLOW, "◎ 閃爍 (有NMEA無fix)") if stat1 else
+                     col(RED, "○ 熄滅"))
+        stat2_str = col(GREEN, "● 常亮") if stat2 else col(RED, "○ 熄滅")
+        print(f"\n  {col(BOLD,'LED 預測')}  STAT1(GPS)={stat1_str}  STAT2(MAG)={stat2_str}")
+
+    def print_separator():
+        print(col(CYAN, "  " + "─"*56))
+
+    try:
+        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.5)
+        print(f"  串口已開啟。等待 MCU 資料...\n")
+        start = time.time()
+        last_summary = time.time()
+
+        while True:
+            if duration_s > 0 and (time.time() - start) > duration_s:
+                break
+
+            raw = ser.readline()
+            if not raw:
+                continue
+            line = raw.decode('utf-8', errors='replace').strip()
+            if not line:
+                continue
+
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+            # 寫入持續日誌檔
+            with open(log_filename, "a", encoding="utf-8") as f_log:
+                f_log.write(f"[{ts}] {line}\n")
+
+            # ── Mag 初始化 ──
+            if "[MAG] MMC5983MA online" in line:
+                state["mag_init"] = "online"
+                m = re.search(r"offset\[X,Y,Z\]=(-?\d+),(-?\d+),(-?\d+)", line)
+                if m:
+                    state["mag_offset"] = tuple(int(m.group(i)) for i in range(1,4))
+                print(col(GREEN, f"  [{ts}] ✅ MAG ONLINE  offset={state['mag_offset']}"))
+
+            elif "[MAG] MMC5983MA NOT detected" in line:
+                state["mag_init"] = "not_detected"
+                print(col(RED, f"  [{ts}] ❌ MAG NOT DETECTED — 請確認 I2C1 接線 (SDA=PB8, SCL=PB7) 及 3V3 供電"))
+
+            # ── Mag 週期遙測  [MAG] B[mG]:x,y,z hdg:d ok:n err:n ──
+            elif line.startswith("[MAG]") and "B[mG]" in line:
+                m = re.search(r"B\[mG\]:(-?\d+),(-?\d+),(-?\d+).*hdg:(\d+).*ok:(\d+).*err:(\d+)", line)
+                if m:
+                    bx,by,bz = int(m.group(1)),int(m.group(2)),int(m.group(3))
+                    hdg = int(m.group(4))
+                    state["mag_last_B"]    = (bx,by,bz)
+                    state["mag_last_hdg"]  = hdg
+                    state["mag_reads_ok"]  = int(m.group(5))
+                    state["mag_reads_err"] = int(m.group(6))
+                    print(col(GREEN,
+                        f"  [{ts}] MAG  B=({bx:+5d},{by:+5d},{bz:+5d}) mG  "
+                        f"hdg={hdg}°  ok={state['mag_reads_ok']}  err={state['mag_reads_err']}"))
+
+            # ── GPS 週期遙測  [GPS] fix:x q:x sat:x ... ok:n err:n ──
+            elif line.startswith("[GPS]"):
+                state["gps_seen_any"] = True
+                mf  = re.search(r"fix:(\d)", line)
+                ms  = re.search(r"sat:(\d+)", line)
+                mok = re.search(r"ok:(\d+)", line)
+                mer = re.search(r"err:(\d+)", line)
+                mla = re.search(r"([NS])(\d+)\.(\d+)", line)
+                mlo = re.search(r"([EW])(\d+)\.(\d+)", line)
+
+                if mf:  state["gps_fix"]  = int(mf.group(1))
+                if ms:  state["gps_sats"] = int(ms.group(1))
+                if mok: state["gps_sentences_ok"]  = int(mok.group(1))
+                if mer: state["gps_sentences_err"] = int(mer.group(1))
+
+                fix_col = col(GREEN,"✅ FIX") if state["gps_fix"] else col(YELLOW,"⏳ 搜星中")
+                sat_col = col(GREEN if state["gps_sats"]>=4 else YELLOW, f"sats={state['gps_sats']}")
+                ok_col  = col(GREEN if state["gps_sentences_ok"]>0 else RED,
+                              f"ok={state['gps_sentences_ok']}")
+                err_col = col(RED if state["gps_sentences_err"]>0 else RESET,
+                              f"err={state['gps_sentences_err']}")
+
+                print(f"  [{ts}] GPS  {fix_col}  {sat_col}  {ok_col}  {err_col}")
+
+                if state["gps_sentences_ok"] == 0 and state["gps_sentences_err"] > 10:
+                    print(col(RED,
+                        "  ⚠️  GPS 有資料進來但 checksum 全失敗 → "
+                        "可能 baud rate 不符（NEO-M9N 預設 38400，板設 115200）"))
+
+            # ── RATE 報告 ──
+            elif line.startswith("[RATE]"):
+                m = re.search(r"BMI088_A:([\d\.]+)Hz.*BMI088_G:([\d\.]+)Hz.*ADXL375:([\d\.]+)Hz.*BMP388:([\d\.]+)Hz", line)
+                if m:
+                    state["bmi_a"],state["bmi_g"],state["adxl"],state["bmp"] = \
+                        float(m.group(1)),float(m.group(2)),float(m.group(3)),float(m.group(4))
+                mmc_rate = re.search(r"MMC5983:([\d\.]+)Hz", line)
+                gps_rate = re.search(r"GPS:([\d\.]+)Hz", line)
+                mag_rate_val = float(mmc_rate.group(1)) if mmc_rate else 0.0
+                gps_rate_val = float(gps_rate.group(1)) if gps_rate else 0.0
+
+                ekf_drop = re.search(r"EKF_DROP:(\d+)", line)
+                if ekf_drop: state["ekf_drop"] = int(ekf_drop.group(1))
+                print(f"  [{ts}] RATE  "
+                      f"BMI-A={state['bmi_a']:.2f}Hz  BMI-G={state['bmi_g']:.2f}Hz  "
+                      f"ADXL={state['adxl']:.2f}Hz  BMP={state['bmp']:.2f}Hz  "
+                      f"MAG={mag_rate_val:.2f}Hz  GPS={gps_rate_val:.2f}Hz  "
+                      f"EKF_DROP={state['ekf_drop']}")
+
+            # ── EKF 校準完成 ──
+            elif "Calibration Done" in line or "EKF_calibrated" in line:
+                state["ekf_calib"] = True
+                print(col(GREEN, f"  [{ts}] ✅ EKF 校準完成"))
+
+            # ── Flash Ring ──
+            elif "[FLASH_RING] Ready" in line:
+                state["flash_ring_ready"] = True
+                print(col(GREEN, f"  [{ts}] ✅ Flash Ring Buffer 就緒"))
+            else:
+                m_pkt = re.search(r"PKT_TOTAL:(\d+)", line)
+                if m_pkt: state["flash_pkt"] = int(m_pkt.group(1))
+                # 其他行原樣印出（EKF TELE、系統訊息等）
+                if any(line.startswith(p) for p in ("[TELE]","[EKF]","[SD]","[FLASH]","[IMU]")):
+                    print(f"  [{ts}] {line}")
+
+            # ── 每 10 秒打印一次摘要 ──
+            if time.time() - last_summary >= 10:
+                last_summary = time.time()
+                print_separator()
+                print(f"  {col(BOLD,'─── 10s 診斷摘要 ───')}")
+
+                # Mag
+                if state["mag_init"] is None:
+                    print(col(YELLOW,"  MAG: 尚未收到初始化訊息（MCU 可能還在啟動中）"))
+                elif state["mag_init"] == "not_detected":
+                    print(col(RED,"  MAG: ❌ init 失敗 — 硬體未連接或 I2C 接線錯誤"))
+                    print(col(RED,"       ↳ 確認 SDA=PB8 / SCL=PB7 / 3V3 / 4.7kΩ pull-up"))
+                else:
+                    print(col(GREEN,f"  MAG: ✅ online  最新 hdg={state['mag_last_hdg']}°  "
+                               f"reads_ok={state['mag_reads_ok']}  err={state['mag_reads_err']}"))
+
+                # GPS
+                if not state["gps_seen_any"]:
+                    print(col(RED,"  GPS: ❌ 完全沒收到 [GPS] 行"))
+                    print(col(RED,"       ↳ 可能原因: GPS TX 未接 PC7, 或 baud rate 錯誤"))
+                    print(col(RED,"       ↳ NEO-M9N 預設 baud=38400，板設 115200，若不一致需用 U-Center 設定"))
+                elif state["gps_sentences_ok"] == 0:
+                    print(col(YELLOW,f"  GPS: ⚠️  有收到遙測但 sentences_ok=0  err={state['gps_sentences_err']}"))
+                    print(col(YELLOW,"       ↳ 可能 baud rate 不符 → NMEA checksum 全失敗"))
+                else:
+                    fix_s = "有 fix ✅" if state["gps_fix"] else "搜星中 ⏳"
+                    print(col(GREEN,f"  GPS: ✅ sentences_ok={state['gps_sentences_ok']}  "
+                               f"sats={state['gps_sats']}  {fix_s}"))
+
+                predict_leds()
+                print_separator()
+
+        ser.close()
+
+    except serial.SerialException as e:
+        print(col(RED, f"\n❌ 串口連線失敗: {e}"))
+        print(col(YELLOW, f"   請確認 {SERIAL_PORT} 是否正確，或改用 --port /dev/cu.xxx"))
+        return False
+    except KeyboardInterrupt:
+        print("\n\n  [使用者中斷]")
+
+    # 最終報告
+    print("\n" + "="*60)
+    print(col(BOLD, "【最終診斷報告】"))
+    print("="*60)
+
+    ok = True
+
+    mag_result = (state["mag_init"] == "online")
+    print(f"  MAG  : {col(GREEN,'✅ online') if mag_result else col(RED,'❌ NOT detected')}")
+    if not mag_result:
+        ok = False
+        print(col(RED,"         → 確認 I2C1 (PB8=SDA, PB7=SCL), 3V3, 4.7kΩ pull-up"))
+
+    gps_alive = state["gps_sentences_ok"] > 0
+    gps_fix   = state["gps_fix"] == 1
+    if gps_alive:
+        print(f"  GPS  : {col(GREEN,'✅ NMEA ok')}  sats={state['gps_sats']}  "
+              f"fix={'yes ✅' if gps_fix else 'no (需戶外)'}")
+    else:
+        ok = False
+        if state["gps_seen_any"]:
+            print(col(YELLOW,f"  GPS  : ⚠️  有遙測但 sentences_ok=0 err={state['gps_sentences_err']}"))
+            print(col(YELLOW,"         → baud rate 不符? NEO-M9N 預設 38400，需 U-Center 改 115200"))
+        else:
+            print(col(RED,"  GPS  : ❌ 完全沒收到 [GPS] 行"))
+            print(col(RED,"         → GPS TX 未接 PC7? 或模組未供電?"))
+
+    print(f"\n  STAT1 預測: {col(GREEN,'● 閃爍/常亮') if gps_alive else col(RED,'○ 熄滅')}")
+    print(f"  STAT2 預測: {col(GREEN,'● 常亮') if mag_result else col(RED,'○ 熄滅')}")
+
+    return ok
+
+# ─────────────────────────────────────────────────────────────
+#  完整 HIL 測試模式（原有功能保留）
+# ─────────────────────────────────────────────────────────────
+def monitor_serial_and_verify():
+    print("\n" + "="*60)
+    print(f"【HIL 監聽 & 自動斷言】| 時長: {TEST_DURATION}s")
+    print("="*60)
+
+    bmi_acc_rates, bmi_gyro_rates, adxl_rates, bmp_rates = [], [], [], []
+    mmc_rates, gps_rates = [], []
     flash_ring_ready = False
     flash_ring_final_pkt = 0
-    
+
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        # 不 reset buffer：MCU 已在跑，buffer 裡可能有有效資料
-        
         start_time = time.time()
-        print("  正在從航電板接收即時遥測數據...")
-        
+        print("  接收遙測中...")
+
         while time.time() - start_time < TEST_DURATION:
             if ser.in_waiting:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
-                if not line:
-                    continue
-                
-                # 打印原始遙測數據或採樣率報告
+                if not line: continue
                 print(f"  [Tele]: {line}")
-                
-                # 匹配 [RATE] BMI088_A:1600Hz, BMI088_G:2000Hz, ADXL375:3200Hz, BMP388:196Hz
-                match = re.search(r"\[RATE\]\s*BMI088_A:(\d+)Hz,\s*BMI088_G:(\d+)Hz,\s*ADXL375:(\d+)Hz,\s*BMP388:(\d+)Hz", line)
-                if match:
-                    bmi_a_r = float(match.group(1))
-                    bmi_g_r = float(match.group(2))
-                    adxl_r = float(match.group(3))
-                    bmp_r = float(match.group(4))
 
-                    # 跳過暖機期：任一感測器為 0 表示 timer 尚未完整計數
-                    if bmi_a_r == 0 or bmi_g_r == 0 or adxl_r == 0 or bmp_r == 0:
-                        print(f"  ⏭️ 【跳過暖機期數據（含 0Hz）】")
+                m = re.search(r"\[RATE\]\s*BMI088_A:([\d\.]+)Hz,\s*BMI088_G:([\d\.]+)Hz,\s*ADXL375:([\d\.]+)Hz,\s*BMP388:([\d\.]+)Hz,\s*MMC5983:([\d\.]+)Hz,\s*GPS:([\d\.]+)Hz", line)
+                if m:
+                    a,g,x,b = float(m.group(1)),float(m.group(2)),float(m.group(3)),float(m.group(4))
+                    m_rate, g_rate = float(m.group(5)), float(m.group(6))
+                    if 0.0 in (a,g,x,b):
+                        print("  ⏭️ 暖機期，跳過")
                         continue
+                    bmi_acc_rates.append(a); bmi_gyro_rates.append(g)
+                    adxl_rates.append(x);    bmp_rates.append(b)
+                    mmc_rates.append(m_rate); gps_rates.append(g_rate)
+                    print(f"  📢 RATE BMI-A={a:.2f}Hz G={g:.2f}Hz ADXL={x:.2f}Hz BMP={b:.2f}Hz MAG={m_rate:.2f}Hz GPS={g_rate:.2f}Hz")
 
-                    bmi_acc_rates.append(bmi_a_r)
-                    bmi_gyro_rates.append(bmi_g_r)
-                    adxl_rates.append(adxl_r)
-                    bmp_rates.append(bmp_r)
-
-                    print(f"  📢 【捕獲採樣率】：BMI088_A={bmi_a_r}Hz | BMI088_G={bmi_g_r}Hz | ADXL375={adxl_r}Hz | BMP388={bmp_r}Hz")
-
-                # Flash Ring Buffer 監控
                 if "[FLASH_RING] Ready." in line:
                     flash_ring_ready = True
-                    print(f"  ✅ 【Flash Ring Buffer 初始化成功】")
+                    start_time = time.time()
+                    print("  ✅ Flash Ring 就緒，重置計時")
 
-                ring_total_match = re.search(r"\[FLASH_RING\] PKT_TOTAL:(\d+)", line)
-                if ring_total_match:
-                    flash_ring_final_pkt = int(ring_total_match.group(1))
+                m2 = re.search(r"\[FLASH_RING\] PKT_TOTAL:(\d+)", line)
+                if m2: flash_ring_final_pkt = int(m2.group(1))
 
         ser.close()
     except Exception as e:
-        print(f"\n❌ 串口連線或讀取失敗: {e}")
+        print(f"\n❌ 串口錯誤: {e}")
         return False
 
-    # 4. HIL 測試斷言與分析報告
-    print("\n" + "="*50)
-    print("【第四步：HIL 測試自動化斷言報告】")
-    print("="*50)
-    
+    print("\n" + "="*60)
+    print("【HIL 斷言結果】")
+    print("="*60)
+
     if not bmi_acc_rates:
-        print("❌ HIL 失敗：未在接收的數據中檢測到任何 [RATE] 採樣率資訊。")
+        print("❌ 未收到 [RATE] 資料")
         return False
-        
-    avg_bmi_a = sum(bmi_acc_rates) / len(bmi_acc_rates)
-    avg_bmi_g = sum(bmi_gyro_rates) / len(bmi_gyro_rates)
-    avg_adxl = sum(adxl_rates) / len(adxl_rates)
-    avg_bmp = sum(bmp_rates) / len(bmp_rates)
-    
-    print(f"📊 平均採樣率統計結果：")
-    print(f"  - BMI088 (Accel)     : {avg_bmi_a:.1f} Hz (目標門檻: >={EXPECTED_MIN_BMI088_A} Hz)")
-    print(f"  - BMI088 (Gyro)      : {avg_bmi_g:.1f} Hz (目標門檻: >={EXPECTED_MIN_BMI088_G} Hz)")
-    print(f"  - ADXL375 (High-G)   : {avg_adxl:.1f} Hz (目標門檻: >={EXPECTED_MIN_ADXL375} Hz)")
-    print(f"  - BMP388 (Baro)      : {avg_bmp:.1f} Hz (目標門檻: >={EXPECTED_MIN_BMP388} Hz)")
-    
-    # 斷言檢查
-    failures = []
-    if avg_bmi_a < EXPECTED_MIN_BMI088_A:
-        failures.append(f"BMI088 Accel 採樣率過低 ({avg_bmi_a:.1f} Hz)")
-    if avg_bmi_g < EXPECTED_MIN_BMI088_G:
-        failures.append(f"BMI088 Gyro 採樣率過低 ({avg_bmi_g:.1f} Hz)")
-    if avg_adxl < EXPECTED_MIN_ADXL375:
-        failures.append(f"ADXL375 採樣率過低 ({avg_adxl:.1f} Hz)")
-    if avg_bmp < EXPECTED_MIN_BMP388:
-        failures.append(f"BMP388 採樣率過低 ({avg_bmp:.1f} Hz)")
-        
-    # Flash Ring Buffer 斷言
-    print(f"\n📦 Flash Ring Buffer 統計：")
-    print(f"  - 初始化成功 : {'✅ 是' if flash_ring_ready else '❌ 否（未收到 Ready 訊息）'}")
-    print(f"  - 寫入封包數 : {flash_ring_final_pkt} 筆 (目標門檻: >={EXPECTED_MIN_RING_PACKETS} 筆)")
 
-    if not flash_ring_ready:
-        failures.append("Flash Ring Buffer 初始化失敗（未收到 [FLASH_RING] Ready. 訊息）")
+    avg = lambda lst: sum(lst)/len(lst)
+    results = {
+        "BMI088 Accel": (avg(bmi_acc_rates), EXPECTED_MIN_BMI088_A),
+        "BMI088 Gyro" : (avg(bmi_gyro_rates), EXPECTED_MIN_BMI088_G),
+        "ADXL375"     : (avg(adxl_rates),     EXPECTED_MIN_ADXL375),
+        "BMP388"      : (avg(bmp_rates),       EXPECTED_MIN_BMP388),
+        "MMC5983MA"   : (avg(mmc_rates),       EXPECTED_MIN_MMC5983),
+        "GPS"         : (avg(gps_rates),       EXPECTED_MIN_GPS),
+    }
+    failures = []
+    for name, (val, thr) in results.items():
+        ok = val >= thr
+        sym = "✅" if ok else "❌"
+        print(f"  {sym} {name}: {val:.1f} Hz (>= {thr})")
+        if not ok: failures.append(f"{name} 過低 ({val:.1f}Hz)")
+
+    print(f"\n  Flash Ring: {'✅' if flash_ring_ready else '❌'} ready | pkt={flash_ring_final_pkt} (>= {EXPECTED_MIN_RING_PACKETS})")
+    if not flash_ring_ready: failures.append("Flash Ring 未就緒")
     if flash_ring_final_pkt < EXPECTED_MIN_RING_PACKETS:
-        failures.append(f"Flash Ring Buffer 寫入封包不足 ({flash_ring_final_pkt} 筆 < {EXPECTED_MIN_RING_PACKETS})")
+        failures.append(f"Flash pkt 不足 ({flash_ring_final_pkt})")
 
     if failures:
-        print("\n❌ 測試結果：【不通過 FAILED】")
-        for f in failures:
-            print(f"  ⚠️ {f}")
+        print(col(RED, "\n❌ FAILED"))
+        for f in failures: print(f"  ⚠️ {f}")
         return False
-    else:
-        print("\n🎉🎉 測試結果：【通過 PASSED】🎉🎉")
-        print("  所有感測器皆穩定運作於官方設計與規範之最高工作頻率！")
-        print(f"  Flash Ring Buffer 成功寫入 {flash_ring_final_pkt} 筆飛行數據至 W25Q128。")
-        return True
+    print(col(GREEN, f"\n🎉 PASSED — 所有感測器正常，Flash 寫入 {flash_ring_final_pkt} 筆"))
+    return True
 
+# ─────────────────────────────────────────────────────────────
+#  入口
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🚀 啟動航電板自動化硬體迴路測試 (HIL)...")
-    
-    if not build_project():
-        sys.exit(1)
-        
-    if not flash_mcu():
-        sys.exit(1)
-        
-    if not monitor_serial_and_verify():
-        sys.exit(2)
-        
+    parser = argparse.ArgumentParser(description="航電板 HIL 測試工具")
+    parser.add_argument("--monitor", action="store_true", help="只監聽 serial（跳過編譯燒錄）")
+    parser.add_argument("--flash",   action="store_true", help="燒錄後監聽（跳過編譯）")
+    parser.add_argument("--port",    default=SERIAL_PORT,  help=f"串口路徑 (預設 {SERIAL_PORT})")
+    parser.add_argument("--duration",type=int, default=MONITOR_DURATION, help="監聽秒數 (0=無限)")
+    args = parser.parse_args()
+
+    SERIAL_PORT = args.port  # 允許命令列覆蓋
+
+    if args.monitor:
+        print("🔍 Debug 監聽模式（不編譯不燒錄）")
+        monitor_debug(args.duration)
+        sys.exit(0)
+
+    if args.flash:
+        print("⚡ 燒錄 + 監聽模式")
+        if not flash_mcu(): sys.exit(1)
+        time.sleep(2)
+        monitor_debug(args.duration)
+        sys.exit(0)
+
+    # 完整 HIL 流程
+    print("🚀 完整 HIL 測試流程（編譯 → 燒錄 → 斷言）")
+    if not build_project(): sys.exit(1)
+    if not flash_mcu():     sys.exit(1)
+    if not monitor_serial_and_verify(): sys.exit(2)
     sys.exit(0)

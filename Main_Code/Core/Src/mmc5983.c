@@ -1,10 +1,14 @@
 /**
   ******************************************************************************
   * @file           : mmc5983.c
-  * @brief          : MMC5983MA 三軸地磁計驅動 (I2C1, 18-bit) 實作
+  * @brief          : MMC5983MA 三軸地磁計驅動 (軟體 I2C, 18-bit, 100Hz 輪詢) 實作
   ******************************************************************************
   */
 #include "mmc5983.h"
+#include "soft_i2c.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "rate_monitor.h"
 #include <math.h>
 #include <stddef.h>
 
@@ -15,27 +19,27 @@
 #define MMC5983_SETRESET_SETTLE_MS  (1U)     /* SET/RESET 線圈脈衝後沉降時間 */
 #define MMC5983_RAW_BYTES           (7U)     /* XOUT0..XYZOUT2 共 7 bytes */
 
-static I2C_HandleTypeDef *mmc_hi2c = NULL;
 static MMC5983_Data_t     mmc_data;
+
+/* --- 軟體低通濾波相關變數 --- */
+static float filtered_gauss[3] = {0.0f, 0.0f, 0.0f};
+static const float alpha = 0.1f;             /* 軟體一階 IIR 係數（截止頻率 ~1.76Hz） */
 
 /* ------------------------------------------------------------------ */
 /* 低階暫存器存取                                                       */
 /* ------------------------------------------------------------------ */
 static HAL_StatusTypeDef mmc_write_reg(uint8_t reg, uint8_t val)
 {
-    return HAL_I2C_Mem_Write(mmc_hi2c, MMC5983_I2C_ADDR, reg,
-                             I2C_MEMADD_SIZE_8BIT, &val, 1U,
-                             MMC5983_I2C_TIMEOUT_MS);
+    return SoftI2C_Mem_Write(MMC5983_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, &val, 1U);
 }
 
 static HAL_StatusTypeDef mmc_read_regs(uint8_t reg, uint8_t *buf, uint16_t len)
 {
-    return HAL_I2C_Mem_Read(mmc_hi2c, MMC5983_I2C_ADDR, reg,
-                            I2C_MEMADD_SIZE_8BIT, buf, len,
-                            MMC5983_I2C_TIMEOUT_MS);
+    return SoftI2C_Mem_Read(MMC5983_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, buf, len);
 }
 
-/* 觸發一次 TM_M 量測、輪詢 STATUS 完成旗標、讀回 18-bit X/Y/Z 原始計數。 */
+/* 觸發一次 TM_M 量測、輪詢 STATUS 完成旗標、讀回 18-bit X/Y/Z 原始計數。
+ * 用於初始化與 SET/RESET 校準階端。 */
 static HAL_StatusTypeDef mmc_measure_raw(int32_t *x, int32_t *y, int32_t *z)
 {
     uint8_t  status = 0U;
@@ -64,7 +68,7 @@ static HAL_StatusTypeDef mmc_measure_raw(int32_t *x, int32_t *y, int32_t *z)
         return HAL_ERROR;
     }
 
-    /* 18-bit 組裝：raw[0]=hi8, raw[1]=mid8, raw[6] 最高 2 bits 為最低 2 bits */
+    /* 18-bit 組裝：raw[0]=hi8, raw[1]=mid8, raw[6] 最低 2 bits */
     *x = (int32_t)(((uint32_t)raw[0] << 10) | ((uint32_t)raw[1] << 2) |
                    (((uint32_t)raw[6] >> 6) & 0x03U));
     *y = (int32_t)(((uint32_t)raw[2] << 10) | ((uint32_t)raw[3] << 2) |
@@ -77,11 +81,11 @@ static HAL_StatusTypeDef mmc_measure_raw(int32_t *x, int32_t *y, int32_t *z)
 /* ------------------------------------------------------------------ */
 /* 公開 API                                                            */
 /* ------------------------------------------------------------------ */
-HAL_StatusTypeDef MMC5983_Init(I2C_HandleTypeDef *hi2c)
+HAL_StatusTypeDef MMC5983_Init(void)
 {
     uint8_t id = 0U;
 
-    mmc_hi2c = hi2c;
+    SoftI2C_Init();
     mmc_data.ok = 0U;
     mmc_data.reads_ok = 0U;
     mmc_data.reads_err = 0U;
@@ -92,11 +96,7 @@ HAL_StatusTypeDef MMC5983_Init(I2C_HandleTypeDef *hi2c)
     }
     mmc_data.heading_deg = 0.0f;
 
-    if (mmc_hi2c == NULL) {
-        return HAL_ERROR;
-    }
-
-    if (HAL_I2C_IsDeviceReady(mmc_hi2c, MMC5983_I2C_ADDR,
+    if (SoftI2C_IsDeviceReady(MMC5983_I2C_ADDR,
                               MMC5983_READY_TRIALS,
                               MMC5983_I2C_TIMEOUT_MS) != HAL_OK) {
         return HAL_ERROR;
@@ -115,13 +115,24 @@ HAL_StatusTypeDef MMC5983_Init(I2C_HandleTypeDef *hi2c)
     }
     HAL_Delay(15);
 
-    /* 設定頻寬 400Hz（量測 ~2ms，雜訊適中） */
+    /* 設定頻寬 400Hz（內部量測 ~2ms，雜訊適中） */
     if (mmc_write_reg(MMC5983_REG_CTRL1, MMC5983_CTRL1_BW_400HZ) != HAL_OK) {
         return HAL_ERROR;
     }
 
     /* 初次 SET/RESET 橋偏校準（同時把感測器留在 SET 極性） */
     if (MMC5983_Recalibrate() != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    /* 初始化軟體濾波器基底值，防止開機時有階躍抖動 */
+    filtered_gauss[0] = mmc_data.gauss[0];
+    filtered_gauss[1] = mmc_data.gauss[1];
+    filtered_gauss[2] = mmc_data.gauss[2];
+
+    /* 啟用 100Hz 硬體連續量測模式 (Continuous Measurement Mode)
+     * 寫入 CONTROL_2 (0x0B)：Cmm_en = 1 (bit 4), CM_Freq = 101 (100Hz, bits 2:0) -> 0x15U */
+    if (mmc_write_reg(MMC5983_REG_CTRL2, 0x15U) != HAL_OK) {
         return HAL_ERROR;
     }
 
@@ -133,10 +144,6 @@ HAL_StatusTypeDef MMC5983_Recalibrate(void)
 {
     int32_t s[3] = {0};
     int32_t r[3] = {0};
-
-    if (mmc_hi2c == NULL) {
-        return HAL_ERROR;
-    }
 
     /* 1) SET 脈衝 → +極性量測 */
     if (mmc_write_reg(MMC5983_REG_CTRL0, MMC5983_CTRL0_SET) != HAL_OK) {
@@ -170,13 +177,10 @@ HAL_StatusTypeDef MMC5983_Recalibrate(void)
     return HAL_OK;
 }
 
+/* 本函數為相容性保留，做阻塞式單次 one-shot 量測。 */
 HAL_StatusTypeDef MMC5983_Read(void)
 {
     int32_t x = 0, y = 0, z = 0;
-
-    if (mmc_hi2c == NULL) {
-        return HAL_ERROR;
-    }
 
     if (mmc_measure_raw(&x, &y, &z) != HAL_OK) {
         mmc_data.reads_err++;
@@ -187,12 +191,11 @@ HAL_StatusTypeDef MMC5983_Read(void)
     mmc_data.raw[1] = y;
     mmc_data.raw[2] = z;
 
-    /* 扣除橋偏 → Gauss（+極性，故直接相減即為磁場分量） */
+    /* 扣除橋偏 → Gauss */
     mmc_data.gauss[0] = (float)(x - mmc_data.offset[0]) / MMC5983_LSB_PER_GAUSS;
     mmc_data.gauss[1] = (float)(y - mmc_data.offset[1]) / MMC5983_LSB_PER_GAUSS;
     mmc_data.gauss[2] = (float)(z - mmc_data.offset[2]) / MMC5983_LSB_PER_GAUSS;
 
-    /* 粗略水平航向（僅供診斷；真正 yaw 修正由 EKF 傾斜補償完成） */
     float h = atan2f(mmc_data.gauss[1], mmc_data.gauss[0]) * (180.0f / 3.14159265f);
     if (h < 0.0f) {
         h += 360.0f;
@@ -206,4 +209,83 @@ HAL_StatusTypeDef MMC5983_Read(void)
 const MMC5983_Data_t* MMC5983_GetData(void)
 {
     return &mmc_data;
+}
+
+/* ------------------------------------------------------------------ */
+/* 軟體 I2C 連續讀取與濾波實作                                           */
+/* ------------------------------------------------------------------ */
+
+HAL_StatusTypeDef MMC5983_Read_Continuous(void)
+{
+    uint8_t raw[MMC5983_RAW_BYTES] = {0};
+
+    if (!mmc_data.ok) {
+        return HAL_ERROR;
+    }
+
+    /* 透過軟體 I2C 直接讀取最新的 7 位元組暫存器資料 (XOUT0 起頭) */
+    if (mmc_read_regs(MMC5983_REG_XOUT0, raw, MMC5983_RAW_BYTES) != HAL_OK) {
+        mmc_data.reads_err++;
+        return HAL_ERROR;
+    }
+
+    /* 18-bit 組裝：raw[0]=hi8, raw[1]=mid8, raw[6] 最低 bits */
+    int32_t x = (int32_t)(((uint32_t)raw[0] << 10) | ((uint32_t)raw[1] << 2) |
+                         (((uint32_t)raw[6] >> 6) & 0x03U));
+    int32_t y = (int32_t)(((uint32_t)raw[2] << 10) | ((uint32_t)raw[3] << 2) |
+                         (((uint32_t)raw[6] >> 4) & 0x03U));
+    int32_t z = (int32_t)(((uint32_t)raw[4] << 10) | ((uint32_t)raw[5] << 2) |
+                         (((uint32_t)raw[6] >> 2) & 0x03U));
+
+    mmc_data.raw[0] = x;
+    mmc_data.raw[1] = y;
+    mmc_data.raw[2] = z;
+
+    /* 扣除偏移並換算為高斯 (Gauss) */
+    float raw_gx = (float)(x - mmc_data.offset[0]) / MMC5983_LSB_PER_GAUSS;
+    float raw_gy = (float)(y - mmc_data.offset[1]) / MMC5983_LSB_PER_GAUSS;
+    float raw_gz = (float)(z - mmc_data.offset[2]) / MMC5983_LSB_PER_GAUSS;
+
+    mmc_data.gauss[0] = raw_gx;
+    mmc_data.gauss[1] = raw_gy;
+    mmc_data.gauss[2] = raw_gz;
+
+    /* 軟體一階 IIR 濾波器：y[k] = y[k-1] * 0.9 + x[k] * 0.1 */
+    taskENTER_CRITICAL();
+    filtered_gauss[0] = filtered_gauss[0] * (1.0f - alpha) + raw_gx * alpha;
+    filtered_gauss[1] = filtered_gauss[1] * (1.0f - alpha) + raw_gy * alpha;
+    filtered_gauss[2] = filtered_gauss[2] * (1.0f - alpha) + raw_gz * alpha;
+    taskEXIT_CRITICAL();
+
+    /* 更新航向角 (heading) */
+    float h = atan2f(filtered_gauss[1], filtered_gauss[0]) * (180.0f / 3.14159265f);
+    if (h < 0.0f) {
+        h += 360.0f;
+    }
+    mmc_data.heading_deg = h;
+
+    mmc_data.reads_ok++;
+
+    /* 統計實際物理採樣率 (100 Hz) */
+    RATE_TICK_MMC5983();
+
+    return HAL_OK;
+}
+
+void MMC5983_GetFilteredGauss(float *x, float *y, float *z)
+{
+    taskENTER_CRITICAL();
+    *x = filtered_gauss[0];
+    *y = filtered_gauss[1];
+    *z = filtered_gauss[2];
+    taskEXIT_CRITICAL();
+}
+
+void MMC5983_SetOffsets(const float *offsets)
+{
+    if (offsets != NULL) {
+        mmc_data.offset[0] = (int32_t)offsets[0];
+        mmc_data.offset[1] = (int32_t)offsets[1];
+        mmc_data.offset[2] = (int32_t)offsets[2];
+    }
 }
