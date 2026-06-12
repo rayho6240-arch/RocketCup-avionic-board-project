@@ -362,6 +362,13 @@ def monitor_serial_and_verify():
     flash_ring_ready = False
     flash_ring_final_pkt = 0
 
+    # P1：新觀測斷言（P0 加入的 1Hz 診斷行）
+    health_bad_lines = []     # 開機 5s 寬限後出現的非零 [HEALTH] 行
+    loop_max_us_seen = 0      # [LOOP] max_us 全程最大值
+    flash_pool_first = None   # [FLASH] pool 首見值
+    flash_pool_last  = None   # [FLASH] pool 最後值
+    t0_boot = time.time()
+
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         start_time = time.time()
@@ -392,6 +399,27 @@ def monitor_serial_and_verify():
 
                 m2 = re.search(r"\[FLASH_RING\] PKT_TOTAL:(\d+)", line)
                 if m2: flash_ring_final_pkt = int(m2.group(1))
+
+                # ── P1：[HEALTH] sens=0xXX ekf=0xXX（開機 5s 寬限：首批批次未進、
+                #         monitors 未餵入前 STALE 屬預期） ──
+                mh = re.search(r"\[HEALTH\]\s*sens=0x([0-9A-Fa-f]+)\s*ekf=0x([0-9A-Fa-f]+)", line)
+                if mh and (time.time() - t0_boot) > 5.0:
+                    sens_b, ekf_b = int(mh.group(1), 16), int(mh.group(2), 16)
+                    if sens_b != 0 or ekf_b != 0:
+                        health_bad_lines.append(line)
+                        print(col(RED, f"  ⚠️ 健康位非零: {line}"))
+
+                # ── P1：[LOOP] max_us=N 水位 ──
+                ml = re.search(r"\[LOOP\]\s*max_us=(\d+)", line)
+                if ml:
+                    loop_max_us_seen = max(loop_max_us_seen, int(ml.group(1)))
+
+                # ── P1：[FLASH] pool=N/64 背景預擦進度 ──
+                mp = re.search(r"\[FLASH\]\s*pool=(\d+)/(\d+)", line)
+                if mp:
+                    val = int(mp.group(1))
+                    if flash_pool_first is None: flash_pool_first = val
+                    flash_pool_last = val
 
         ser.close()
     except Exception as e:
@@ -426,6 +454,36 @@ def monitor_serial_and_verify():
     if not flash_ring_ready: failures.append("Flash Ring 未就緒")
     if flash_ring_final_pkt < EXPECTED_MIN_RING_PACKETS:
         failures.append(f"Flash pkt 不足 ({flash_ring_final_pkt})")
+
+    # ── P1：健康位斷言（開機 5s 寬限後必須全程 sens=0 ekf=0） ──
+    if health_bad_lines:
+        print(f"  ❌ [HEALTH] 出現 {len(health_bad_lines)} 行非零健康位（誤報率檢查失敗）")
+        failures.append(f"[HEALTH] 非零 ×{len(health_bad_lines)}（首行: {health_bad_lines[0]}）")
+    else:
+        print("  ✅ [HEALTH] 全程 sens=0x00 ekf=0x00")
+
+    # ── P1：[LOOP] 水位（PAD 期背景預擦單次最壞 ~400ms 屬預期，>450ms 視為異常；
+    #        飛行態 <20ms 斷言需配合 HIL_FSM_BENCH 場景另行驗證） ──
+    if loop_max_us_seen > 0:
+        loop_ok = loop_max_us_seen <= 450000
+        sym = "✅" if loop_ok else "❌"
+        note = ""
+        if 20000 < loop_max_us_seen <= 450000:
+            note = "（PAD 期背景預擦造成的尖峰屬預期；飛行態斷言 <20ms 需 HIL_FSM_BENCH）"
+        print(f"  {sym} [LOOP] max_us={loop_max_us_seen} {note}")
+        if not loop_ok: failures.append(f"[LOOP] 單迴圈耗時異常 ({loop_max_us_seen}us > 450ms)")
+    else:
+        print("  ⚠️ 未收到 [LOOP] 行（韌體版本過舊?）")
+
+    # ── P1：[FLASH] pool 背景預擦進度（30s 內應自 ~10 持續增長） ──
+    if flash_pool_first is not None:
+        grew = flash_pool_last >= flash_pool_first + 5 or flash_pool_last >= 64
+        sym = "✅" if grew else "⚠️"
+        print(f"  {sym} [FLASH] pool {flash_pool_first} → {flash_pool_last}/64"
+              f"{'' if grew else '（增長停滯，檢查背景預擦）'}")
+        if not grew: failures.append(f"[FLASH] pool 增長停滯 ({flash_pool_first}→{flash_pool_last})")
+    else:
+        print("  ⚠️ 未收到 [FLASH] pool 行（韌體版本過舊?）")
 
     if failures:
         print(col(RED, "\n❌ FAILED"))
