@@ -20,6 +20,7 @@
 #include "spi3_bus.h"   /* SPI3 與 E80 920MHz LoRa 共用，CS 期間須持互斥鎖 */
 #include "crc16.h"      /* P1：CRC-16/CCITT-FALSE 單一實作 */
 #include <stdarg.h>
+#include <stddef.h>     /* offsetof：Flash_DumpAll 欄位解析 */
 #include <stdio.h>
 #include <string.h>
 
@@ -711,4 +712,146 @@ W25QXX_StatusTypeDef Flash_WriteMissionSummary(FlashMissionSummary_t *summary)
 
     // 3. 寫入資料
     return W25QXX_WriteData(0x001000UL, (const uint8_t *)summary, sizeof(FlashMissionSummary_t));
+}
+
+/* ============================================================
+ *  Flash Dump（P2 自 w25q128.c 併入，雙驅動合一）
+ * ============================================================ */
+
+/* 輸出單行標準 Hex Dump（最多 16 bytes）至 USART2。
+ * 格式: XXXXXX: XX XX XX XX XX XX XX XX  XX XX XX XX XX XX XX XX  |................| */
+static void flash_print_hex_line(uint32_t addr, const uint8_t *data, uint16_t len)
+{
+    printf("%06X: ", (unsigned int)addr);
+    for (int i = 0; i < 16; i++) {
+        if (i < (int)len) printf("%02X ", data[i]);
+        else               printf("   ");
+        if (i == 7)        printf(" ");   /* 中間空格分隔高低 8 bytes */
+    }
+    printf(" |");
+    for (int i = 0; i < (int)len; i++)
+        printf("%c", (data[i] >= 0x20 && data[i] < 0x7F) ? data[i] : '.');
+    printf("|\r\n");
+}
+
+/* 完整讀取三個記憶體分區並格式化輸出至 USART2。
+ *   [1] 系統旗標區  (0x000000~0x000FFF, 4KB)   — 全量 Hex Dump + 欄位解析
+ *   [2] 任務總結區  (0x001000~0x00FFFF, 60KB)  — 前 128 bytes Hex Dump + 欄位解析
+ *   [3] Ring Buffer (0x010000~0xFFFFFF, ~15.9MB)— 前 3 封包 Hex Dump + 空滿判斷
+ * 每讀完一頁 (256 bytes) 自動餵狗，確保不觸發 2s IWDG 超時。
+ * 欄位偏移一律 offsetof 結構體推導（取代舊 w25q128.h 手寫偏移，佈局改動自動跟隨）。 */
+void Flash_DumpAll(void)
+{
+    uint8_t buf[256];
+
+    printf("\r\n");
+    printf("========================================================\r\n");
+    printf("  W25Q128 Flash Memory Dump\r\n");
+    printf("  Total 16MB  (0x000000 ~ 0xFFFFFF)\r\n");
+    printf("========================================================\r\n");
+
+    /* --- JEDEC ID 驗證，確認晶片正常就緒 --- */
+    uint8_t mfr = 0; uint16_t dev = 0;
+    W25QXX_ReadJEDEC_ID(&mfr, &dev);
+    uint32_t jedec = ((uint32_t)mfr << 16) | dev;
+    printf("[JEDEC] 0x%06X  %s\r\n", (unsigned int)jedec,
+           (jedec == 0xEF4018UL) ? "W25Q128JV OK" : "ID MISMATCH!");
+    if (jedec != 0xEF4018UL) {
+        printf("[FLASH] Flash 晶片未就緒，中止讀取。\r\n\r\n");
+        return;
+    }
+
+    /* === [1] 系統旗標區：全量 Hex Dump，每頁餵狗 === */
+    printf("\r\n[1] 系統旗標區  0x%06X ~ 0x%06X  (%u bytes)\r\n",
+           (unsigned int)FLASH_SYSFLAGS_ADDR,
+           (unsigned int)(FLASH_SYSFLAGS_ADDR + FLASH_SYSFLAGS_SIZE - 1),
+           (unsigned int)FLASH_SYSFLAGS_SIZE);
+    printf("--------------------------------------------------------\r\n");
+    for (uint32_t off = 0; off < FLASH_SYSFLAGS_SIZE; off += 256) {
+        W25QXX_ReadData(FLASH_SYSFLAGS_ADDR + off, buf, 256);
+        HAL_IWDG_Refresh(&hiwdg);
+        for (uint16_t ln = 0; ln < 256; ln += 16)
+            flash_print_hex_line(FLASH_SYSFLAGS_ADDR + off + ln, buf + ln, 16);
+    }
+
+    /* 欄位解析（offsetof 推導，與 FlashSysFlags_t 佈局同步） */
+    W25QXX_ReadData(FLASH_SYSFLAGS_ADDR, buf, sizeof(FlashSysFlags_t));
+    HAL_IWDG_Refresh(&hiwdg);
+    printf("  [欄位解析]\r\n");
+    printf("  FSM State     @ +0x%04X : 0x%02X\r\n",
+           (unsigned int)offsetof(FlashSysFlags_t, fsm_state),
+           buf[offsetof(FlashSysFlags_t, fsm_state)]);
+    printf("  Drogue/Main   @ +0x%04X : %u / %u  (reboot=%u)\r\n",
+           (unsigned int)offsetof(FlashSysFlags_t, drogue_deployed),
+           buf[offsetof(FlashSysFlags_t, drogue_deployed)],
+           buf[offsetof(FlashSysFlags_t, main_deployed)],
+           buf[offsetof(FlashSysFlags_t, reboot_count)]);
+    printf("  Calib magic   @ +0x%04X : %02X %02X %02X %02X  (期望 A5 B1 DE C0)\r\n",
+           (unsigned int)offsetof(FlashSysFlags_t, calib),
+           buf[offsetof(FlashSysFlags_t, calib)+0], buf[offsetof(FlashSysFlags_t, calib)+1],
+           buf[offsetof(FlashSysFlags_t, calib)+2], buf[offsetof(FlashSysFlags_t, calib)+3]);
+
+    /* === [2] 任務總結區：前 128 bytes（涵蓋所有已定義欄位） === */
+    printf("\r\n[2] 任務總結區  0x%06X ~ 0x%06X  (%u bytes，顯示前 128 bytes)\r\n",
+           (unsigned int)FLASH_SUMMARY_ADDR,
+           (unsigned int)(FLASH_SUMMARY_ADDR + FLASH_SUMMARY_SIZE - 1),
+           (unsigned int)FLASH_SUMMARY_SIZE);
+    printf("--------------------------------------------------------\r\n");
+    W25QXX_ReadData(FLASH_SUMMARY_ADDR, buf, 128);
+    HAL_IWDG_Refresh(&hiwdg);
+    for (uint16_t ln = 0; ln < 128; ln += 16)
+        flash_print_hex_line(FLASH_SUMMARY_ADDR + ln, buf + ln, 16);
+
+    printf("  [欄位解析]\r\n");
+    printf("  Max Altitude  @ +0x%04X : %02X %02X %02X %02X  (float, LE)\r\n",
+           (unsigned int)offsetof(FlashMissionSummary_t, max_altitude),
+           buf[offsetof(FlashMissionSummary_t, max_altitude)+0],
+           buf[offsetof(FlashMissionSummary_t, max_altitude)+1],
+           buf[offsetof(FlashMissionSummary_t, max_altitude)+2],
+           buf[offsetof(FlashMissionSummary_t, max_altitude)+3]);
+    printf("  Max Velocity  @ +0x%04X : %02X %02X %02X %02X  (float, LE)\r\n",
+           (unsigned int)offsetof(FlashMissionSummary_t, max_velocity),
+           buf[offsetof(FlashMissionSummary_t, max_velocity)+0],
+           buf[offsetof(FlashMissionSummary_t, max_velocity)+1],
+           buf[offsetof(FlashMissionSummary_t, max_velocity)+2],
+           buf[offsetof(FlashMissionSummary_t, max_velocity)+3]);
+    printf("  State Times   @ +0x%04X :\r\n",
+           (unsigned int)offsetof(FlashMissionSummary_t, state_timestamps));
+    for (int i = 0; i < 8; i++) {
+        uint32_t base = offsetof(FlashMissionSummary_t, state_timestamps) + (uint32_t)i * 4U;
+        uint32_t ts = (uint32_t)buf[base+0]
+                    | (uint32_t)buf[base+1] << 8
+                    | (uint32_t)buf[base+2] << 16
+                    | (uint32_t)buf[base+3] << 24;
+        printf("    [%d] %u ms\r\n", i, (unsigned int)ts);
+    }
+
+    /* === [3] Ring Buffer：前 3 封包 + 空滿判斷 === */
+    const uint16_t ring_preview = (uint16_t)(FLASH_RING_PACKET_SIZE * 3);  /* 240 bytes */
+    printf("\r\n[3] Ring Buffer  0x%06X ~ 0x%06X  (%u MB)\r\n",
+           (unsigned int)FLASH_RINGBUF_ADDR,
+           (unsigned int)FLASH_RINGBUF_END,
+           (unsigned int)(FLASH_RINGBUF_SIZE >> 20));
+    printf("    容量: %u 封包（飛行 50Hz ≈ %u 分鐘）\r\n",
+           (unsigned int)(FLASH_RINGBUF_SIZE / FLASH_RING_PACKET_SIZE),
+           (unsigned int)(FLASH_RINGBUF_SIZE / FLASH_RING_PACKET_SIZE / 50UL / 60UL));
+    printf("    顯示前 %u bytes (前 3 封包)\r\n", ring_preview);
+    printf("--------------------------------------------------------\r\n");
+    W25QXX_ReadData(FLASH_RINGBUF_ADDR, buf, ring_preview);
+    HAL_IWDG_Refresh(&hiwdg);
+
+    uint8_t ring_has_data = 0;
+    for (uint16_t i = 0; i < ring_preview; i++) {
+        if (buf[i] != 0xFF) { ring_has_data = 1; break; }
+    }
+    printf("  狀態: %s\r\n", ring_has_data ? "有數據 (非全空白)" : "全空白 (0xFF，尚未寫入)");
+
+    for (uint16_t ln = 0; ln < ring_preview; ln += 16) {
+        uint16_t rem = ring_preview - ln;
+        flash_print_hex_line(FLASH_RINGBUF_ADDR + ln, buf + ln, rem >= 16 ? 16 : rem);
+    }
+
+    printf("\r\n[FLASH] Dump 完畢。\r\n");
+    printf("========================================================\r\n\r\n");
+    HAL_IWDG_Refresh(&hiwdg);
 }

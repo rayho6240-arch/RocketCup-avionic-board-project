@@ -27,7 +27,6 @@
 #include "adxl375.h"
 #include "bmp388.h"
 #include "w25qxx.h"
-#include "w25q128.h"
 #include "rate_monitor.h"  /* 採樣率監測模組，要停用請在 rate_monitor.h 註解 #define RATE_MONITOR_ENABLE */
 #include "ekf.h"
 #include "gps.h"
@@ -1817,8 +1816,8 @@ void StartDefaultTask(void *argument)
    * USER_BT1 為上拉輸入 → 按下讀到 LOW (GPIO_PIN_RESET)。
    * 平時開機跳過 dump，可省下整顆 Flash 輸出 (~3–5 秒) 的初始化時間 (Item N)。 */
   if (HAL_GPIO_ReadPin(USER_BT1_GPIO_Port, USER_BT1_Pin) == GPIO_PIN_RESET) {
-      SPI3_Bus_Lock();          /* Flash_DumpAll 走 w25q128.c 自有 CS，須在呼叫端持 SPI3 鎖以與 E80 互斥 */
-      Flash_DumpAll(&hspi3);
+      SPI3_Bus_Lock();          /* 整段 dump 持 SPI3 鎖，保證輸出不被 E80 遙測交錯 */
+      Flash_DumpAll();          /* P2：已併入 w25qxx.c，SPI handle 由驅動內部綁定 */
       SPI3_Bus_Unlock();
   }
 

@@ -205,6 +205,12 @@ void Flash_Test(void);
 _Static_assert(FLASH_RING_SECTOR_SIZE == W25QXX_SECTOR_SIZE,
                "flash_ring_math.h 擦除粒度必須與 W25QXX_SECTOR_SIZE 一致");
 
+/* 靜態分區位址（P2 自 w25q128.h 併入；SysFlags/Summary 讀寫函式即操作此二區） */
+#define FLASH_SYSFLAGS_ADDR      0x000000UL   /* 系統旗標區起始（Sector 0） */
+#define FLASH_SYSFLAGS_SIZE      0x001000UL   /* 4 KB */
+#define FLASH_SUMMARY_ADDR       0x001000UL   /* 任務總結區起始（Sectors 1-15） */
+#define FLASH_SUMMARY_SIZE       0x00F000UL   /* 60 KB */
+
 /* ============================================================
  *  結構體定義
  * ============================================================ */
@@ -345,6 +351,10 @@ uint16_t ring_crc16(const uint8_t *data, uint16_t len);
 W25QXX_StatusTypeDef Flash_WriteSysFlags(FlashSysFlags_t *flags);
 W25QXX_StatusTypeDef Flash_ReadSysFlags(FlashSysFlags_t *flags);
 W25QXX_StatusTypeDef Flash_WriteMissionSummary(FlashMissionSummary_t *summary);
+
+/** @brief 開機完整 Dump 三分區至 USART2（USER_BT1 按住開機觸發；P2 自 w25q128.c 併入）。
+ *         呼叫端須持 SPI3 鎖（main.c 既有作法），內部每頁讀取自動餵狗。 */
+void Flash_DumpAll(void);
 
 #ifdef __cplusplus
 }
