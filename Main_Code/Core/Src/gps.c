@@ -13,8 +13,9 @@
 #include "rate_monitor.h"
 #include <string.h>
 
-/* NMEA 單句最長 82 字元（含 $ 與 CRLF）。緩衝留 96 充足餘量。 */
-#define GPS_LINE_MAX   96U
+/* 純解析邏輯（組句狀態機 / checksum / GGA / RMC）已抽至 gps_parse.h（host 可測，
+ * tests/test_gps.c），本檔僅保留不純的部分：DMA 環形差分、ISR↔task 交接、UBX 初始化。 */
+#define GPS_LINE_MAX   GPS_PARSE_LINE_MAX
 
 /* --- 模組狀態 --- */
 static UART_HandleTypeDef *gps_huart = NULL;
@@ -25,8 +26,7 @@ static UART_HandleTypeDef *gps_huart = NULL;
 static uint8_t  gps_dma_buf[GPS_DMA_BUF_SIZE];
 static uint16_t gps_dma_old_pos = 0;               /* 上次已處理到的 DMA 寫入位置（環形） */
 
-static char     gps_asm[GPS_LINE_MAX];             /* ISR 內組裝中的句子 */
-static uint16_t gps_asm_len = 0;
+static GpsLineAsm_t gps_line_asm;                  /* ISR 內組句狀態機（gps_parse.h 純邏輯） */
 static char     gps_ready[GPS_LINE_MAX];           /* 已就緒、待 task 解析的整句 */
 static volatile uint8_t gps_line_ready = 0;        /* 1 = gps_ready 有一句待解析 */
 static volatile uint32_t gps_overrun_drops = 0;    /* task 還沒解析就被新句覆蓋的次數 */
@@ -38,217 +38,17 @@ static GPS_Data_t gps_data;                        /* 對外解析結果 */
 /* ------------------------------------------------------------------ */
 
 /* 由 HAL_UARTEx_RxEventCallback（ISR context）對每個新收到的位元組呼叫。
- * 維持極短：只做字元累加，遇 '\n' 把整句搬到 ready buffer 並設旗標。 */
+ * 組句規則在 gps_line_feed()（未見 '$' 不收、溢位 discard 至下一個 '$'），
+ * 此處僅做 ready buffer 交接。 */
 static void GPS_FeedByte(uint8_t b)
 {
-    if (b == '$') {                 /* 句首：重置組裝緩衝（容錯：句中遺漏 CRLF 也能重新對齊） */
-        gps_asm_len = 0;
-        gps_asm[gps_asm_len++] = (char)b;
-        return;
-    }
-
-    if (b == '\r' || b == '\n') {   /* 句尾 */
-        if (gps_asm_len > 0) {
-            if (gps_line_ready) {
-                /* 上一句還沒被 task 取走 → 覆蓋並計數（GPS 1Hz、主迴圈快，理論上不會發生） */
-                gps_overrun_drops++;
-            }
-            uint16_t n = gps_asm_len;
-            if (n >= GPS_LINE_MAX) n = GPS_LINE_MAX - 1;
-            memcpy(gps_ready, gps_asm, n);
-            gps_ready[n] = '\0';
-            gps_line_ready = 1;
-            gps_asm_len = 0;
+    if (gps_line_feed(&gps_line_asm, b)) {
+        if (gps_line_ready) {
+            /* 上一句還沒被 task 取走 → 覆蓋並計數（GPS 10Hz、主迴圈快，理論上不會發生） */
+            gps_overrun_drops++;
         }
-        return;
-    }
-
-    if (gps_asm_len < (GPS_LINE_MAX - 1)) {
-        gps_asm[gps_asm_len++] = (char)b;
-    } else {
-        gps_asm_len = 0;            /* 溢位（雜訊/非 NMEA）→ 丟棄重來 */
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* NMEA 解析小工具                                                     */
-/* ------------------------------------------------------------------ */
-
-/* 驗證 "$....*HH" 的 XOR checksum。回傳 1 = 通過。 */
-static uint8_t nmea_checksum_ok(const char *s)
-{
-    if (s[0] != '$') return 0;
-    uint8_t sum = 0;
-    const char *p = s + 1;
-    while (*p && *p != '*') {
-        sum ^= (uint8_t)(*p);
-        p++;
-    }
-    if (*p != '*') return 0;                 /* 無 checksum 欄位 */
-    /* 解析其後兩個 hex 字元 */
-    uint8_t hi = 0, lo = 0;
-    char c1 = p[1], c2 = p[2];
-    if (c1 >= '0' && c1 <= '9') hi = c1 - '0';
-    else if (c1 >= 'A' && c1 <= 'F') hi = c1 - 'A' + 10;
-    else if (c1 >= 'a' && c1 <= 'f') hi = c1 - 'a' + 10;
-    else return 0;
-    if (c2 >= '0' && c2 <= '9') lo = c2 - '0';
-    else if (c2 >= 'A' && c2 <= 'F') lo = c2 - 'A' + 10;
-    else if (c2 >= 'a' && c2 <= 'f') lo = c2 - 'a' + 10;
-    else return 0;
-    return ((hi << 4) | lo) == sum;
-}
-
-/* 取第 n 個逗號分隔欄位（n=0 為句型 token，如 "$GPGGA"）。
- * 複製到 out（最多 cap-1 字元 + NUL）。回傳欄位長度（0 = 空欄或不存在）。 */
-static int nmea_field(const char *s, int n, char *out, int cap)
-{
-    int field = 0;
-    const char *p = s;
-    /* 移到第 n 欄起點 */
-    while (field < n && *p) {
-        if (*p == ',') field++;
-        p++;
-    }
-    if (field != n) { out[0] = '\0'; return 0; }
-    int len = 0;
-    while (*p && *p != ',' && *p != '*' && len < cap - 1) {
-        out[len++] = *p++;
-    }
-    out[len] = '\0';
-    return len;
-}
-
-/* 解析 NMEA 經緯度 "ddmm.mmmm" / "dddmm.mmmm" → 度 ×1e6 (int32)，依半球套用正負號。
- * 手動解析（不依賴 strtod），用 double 做最終縮放以保留 ~8 位有效數字。 */
-static int32_t nmea_latlon_1e6(const char *f, char hemi)
-{
-    const char *dot = strchr(f, '.');
-    if (!dot) return 0;
-    int intlen = (int)(dot - f);
-    if (intlen < 3) return 0;               /* 至少 "mm." 之前要有度+分 */
-
-    long deg = 0;
-    int i = 0;
-    for (; i < intlen - 2; i++) {
-        if (f[i] < '0' || f[i] > '9') return 0;
-        deg = deg * 10 + (f[i] - '0');
-    }
-    long min_int = 0;
-    for (; i < intlen; i++) {
-        if (f[i] < '0' || f[i] > '9') return 0;
-        min_int = min_int * 10 + (f[i] - '0');
-    }
-    long frac = 0, fdiv = 1;
-    const char *p = dot + 1;
-    while (*p >= '0' && *p <= '9' && fdiv < 1000000L) {
-        frac = frac * 10 + (*p - '0');
-        fdiv *= 10;
-        p++;
-    }
-    double minutes = (double)min_int + (double)frac / (double)fdiv;
-    double degrees = (double)deg + minutes / 60.0;
-    int32_t out = (int32_t)(degrees * 1e6 + 0.5);
-    if (hemi == 'S' || hemi == 'W') out = -out;
-    return out;
-}
-
-/* 極簡 atof：可選正負號 + 整數 + 小數，無指數。空字串回傳 0。 */
-static float nmea_atof(const char *s)
-{
-    float sign = 1.0f;
-    if (*s == '-') { sign = -1.0f; s++; }
-    else if (*s == '+') { s++; }
-    float val = 0.0f;
-    while (*s >= '0' && *s <= '9') { val = val * 10.0f + (float)(*s - '0'); s++; }
-    if (*s == '.') {
-        s++;
-        float scale = 0.1f;
-        while (*s >= '0' && *s <= '9') { val += (float)(*s - '0') * scale; scale *= 0.1f; s++; }
-    }
-    return sign * val;
-}
-
-static int nmea_atoi(const char *s)
-{
-    int v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; }
-    return v;
-}
-
-/* 比對句型（忽略 talker ID 前綴：GP/GN/GL/GA 等）。type 例如 "GGA"。 */
-static uint8_t nmea_is_type(const char *s, const char *type)
-{
-    /* s 形如 "$GPGGA"；句型三碼位於索引 3..5 */
-    return (s[0] == '$' && strncmp(s + 3, type, 3) == 0);
-}
-
-/* ------------------------------------------------------------------ */
-/* 句型解析                                                            */
-/* ------------------------------------------------------------------ */
-
-/* $--GGA: 時間,緯度,N/S,經度,E/W,fix品質,衛星數,HDOP,海拔,M,水準面分離,M,... */
-static void gps_parse_gga(const char *s)
-{
-    char buf[16], ns[2], ew[2];
-
-    int q = 0;
-    if (nmea_field(s, 6, buf, sizeof(buf)) > 0) q = nmea_atoi(buf);
-    gps_data.fix_quality = (uint8_t)q;
-
-    if (nmea_field(s, 7, buf, sizeof(buf)) > 0) gps_data.satellites = (uint8_t)nmea_atoi(buf);
-
-    int latlen = nmea_field(s, 2, buf, sizeof(buf));
-    nmea_field(s, 3, ns, sizeof(ns));
-    if (latlen > 0 && ns[0]) {
-        char latbuf[16];
-        memcpy(latbuf, buf, sizeof(latbuf) > (size_t)latlen ? (size_t)latlen + 1 : sizeof(latbuf));
-        gps_data.lat_1e6 = nmea_latlon_1e6(latbuf, ns[0]);
-    }
-    int lonlen = nmea_field(s, 4, buf, sizeof(buf));
-    nmea_field(s, 5, ew, sizeof(ew));
-    if (lonlen > 0 && ew[0]) {
-        gps_data.lon_1e6 = nmea_latlon_1e6(buf, ew[0]);
-    }
-
-    if (nmea_field(s, 1, buf, sizeof(buf)) > 0) gps_data.utc_hhmmss = (uint32_t)nmea_atoi(buf);
-    if (nmea_field(s, 9, buf, sizeof(buf)) > 0) gps_data.altitude_m = nmea_atof(buf);
-    if (nmea_field(s, 11, buf, sizeof(buf)) > 0) gps_data.geoid_sep_m = nmea_atof(buf);
-
-    if (q > 0) {
-        gps_data.fix_valid = 1;
-        gps_data.last_fix_tick = HAL_GetTick();
-    } else {
-        gps_data.fix_valid = 0;
-    }
-}
-
-/* $--RMC: 時間,狀態(A/V),緯度,N/S,經度,E/W,地速(knots),航向,日期,... */
-static void gps_parse_rmc(const char *s)
-{
-    char buf[16], st[2], ns[2], ew[2];
-
-    nmea_field(s, 2, st, sizeof(st));
-    uint8_t valid = (st[0] == 'A');
-
-    if (nmea_field(s, 1, buf, sizeof(buf)) > 0) gps_data.utc_hhmmss = (uint32_t)nmea_atoi(buf);
-
-    if (valid) {
-        int latlen = nmea_field(s, 3, buf, sizeof(buf));
-        nmea_field(s, 4, ns, sizeof(ns));
-        if (latlen > 0 && ns[0]) gps_data.lat_1e6 = nmea_latlon_1e6(buf, ns[0]);
-
-        int lonlen = nmea_field(s, 5, buf, sizeof(buf));
-        nmea_field(s, 6, ew, sizeof(ew));
-        if (lonlen > 0 && ew[0]) gps_data.lon_1e6 = nmea_latlon_1e6(buf, ew[0]);
-
-        if (nmea_field(s, 7, buf, sizeof(buf)) > 0) gps_data.speed_mps = nmea_atof(buf) * 0.514444f; /* knots→m/s */
-        if (nmea_field(s, 8, buf, sizeof(buf)) > 0) gps_data.course_deg = nmea_atof(buf);
-
-        gps_data.fix_valid = 1;
-        gps_data.last_fix_tick = HAL_GetTick();
-    } else {
-        gps_data.fix_valid = 0;
+        memcpy(gps_ready, gps_line_asm.buf, (size_t)gps_line_asm.len + 1U);
+        gps_line_ready = 1;
     }
 }
 
@@ -260,7 +60,7 @@ void GPS_Init(UART_HandleTypeDef *huart)
 {
     gps_huart = huart;
     memset(&gps_data, 0, sizeof(gps_data));
-    gps_asm_len = 0;
+    gps_line_asm_init(&gps_line_asm);
     gps_line_ready = 0;
     gps_dma_old_pos = 0;
 
@@ -317,21 +117,11 @@ uint8_t GPS_Update(void)
     memcpy(line, gps_ready, GPS_LINE_MAX);
     gps_line_ready = 0;
 
-    if (!nmea_checksum_ok(line)) {
-        gps_data.sentences_err++;
-        return 1;
-    }
-
-    if (nmea_is_type(line, "GGA")) {
-        gps_parse_gga(line);
-        gps_data.sentences_ok++;
-        RATE_TICK_GPS();
-    } else if (nmea_is_type(line, "RMC")) {
-        gps_parse_rmc(line);
-        gps_data.sentences_ok++;
+    uint8_t kind = gps_parse_sentence(&gps_data, line, HAL_GetTick());
+    if (kind == GPS_SENT_GGA || kind == GPS_SENT_RMC) {
         RATE_TICK_GPS();
     }
-    /* 其他句型（GSV/GSA/VTG...）目前略過 */
+    /* GPS_SENT_SKIP：其他句型（GSV/GSA/VTG...）略過；GPS_SENT_BAD 已計 sentences_err */
     return 1;
 }
 
@@ -375,7 +165,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     if (gps_huart && huart->Instance == gps_huart->Instance) {
         /* UART 錯誤（常見為 overrun）會中止 DMA 接收 → 清狀態並重啟，避免 GPS RX 死掉 */
         __HAL_UART_CLEAR_OREFLAG(gps_huart);
-        gps_asm_len = 0;
+        gps_line_asm_init(&gps_line_asm);
         gps_dma_old_pos = 0;
         HAL_UARTEx_ReceiveToIdle_DMA(gps_huart, gps_dma_buf, GPS_DMA_BUF_SIZE);
     }

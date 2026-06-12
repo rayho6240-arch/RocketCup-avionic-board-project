@@ -17,23 +17,7 @@ extern "C" {
 #endif
 
 #include "stm32f4xx_hal.h"
-
-/* --- 解析後的 GPS 資料 --- */
-typedef struct {
-    uint8_t  fix_valid;        /* 1 = RMC 狀態 'A' 或 GGA fix>0（有有效定位） */
-    uint8_t  fix_quality;      /* GGA fix quality：0=invalid,1=GPS,2=DGPS...   */
-    uint8_t  satellites;       /* GGA 使用衛星數                               */
-    int32_t  lat_1e6;          /* 緯度 ×1e6 (deg)，+北 / −南                    */
-    int32_t  lon_1e6;          /* 經度 ×1e6 (deg)，+東 / −西                    */
-    float    altitude_m;       /* GGA 海拔高度 (m, MSL)                         */
-    float    geoid_sep_m;      /* GGA 大地水準面分離 (m)                        */
-    float    speed_mps;        /* RMC 地速 (m/s，由 knots 換算)                 */
-    float    course_deg;       /* RMC 航向 (deg true)                          */
-    uint32_t utc_hhmmss;       /* UTC 時間 hhmmss（整數部分）                    */
-    uint32_t last_fix_tick;    /* 最近一次有效定位的 HAL_GetTick() (ms)         */
-    uint32_t sentences_ok;     /* 通過 checksum 並成功解析的句數（診斷）         */
-    uint32_t sentences_err;    /* checksum 失敗或格式錯誤的句數（診斷）          */
-} GPS_Data_t;
+#include "gps_parse.h"   /* GPS_Data_t 與純解析邏輯（host 可測）移居於此 */
 
 /* --- API --- */
 
