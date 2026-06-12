@@ -46,6 +46,7 @@ extern "C" {
 #define EKF_GUARD_VEL_H_MAX        200.0f   /* 水平速度上限 */
 #define EKF_GUARD_OOB_CLEAR_MS     1000U    /* 回界後 1s 解除 OOB 位 */
 #define EKF_GUARD_NAN_STICKY_MS    5000U    /* NaN 重建後黏滯 5s（提示地面站） */
+#define EKF_GUARD_DIVERGE_RESET_MS 3000U    /* P1：DIVERGE 持續 3s → 垂直通道自救重置 */
 
 /* baro 創新值閘控：|y| > max(5·sqrt(S), 25m) 拒收。回傳 1=接受、0=拒收。 */
 static inline uint8_t ekf_guard_baro_accept(float y, float S)

@@ -88,6 +88,7 @@ static uint32_t EKF_last_baro_accept_tick CCMRAM = 0;         // 最後一筆被
 static float    EKF_last_baro_accepted_rel CCMRAM = 0.0f;     // 最後被接受的 baro 相對高度（NaN 重建用）
 static uint32_t EKF_last_oob_tick CCMRAM = 0;                 // 最後一次狀態夾限 tick（0=從未）
 static uint32_t EKF_last_nan_tick CCMRAM = 0;                 // 最後一次 NaN 重建 tick（0=從未）
+static uint32_t EKF_diverge_since_tick CCMRAM = 0;            // P1：DIVERGE 起算 tick（垂直自救用）
 static volatile uint32_t EKF_last_update_tick CCMRAM = 0;     // EKF_Task 最後完成一個 buffer 的 tick
 
 // -------------------------------------------------------------------------
@@ -421,7 +422,32 @@ void EKF_UpdateBaroDelayed(float baro_alt, float z_pred) {
             EKF_baro_reject_streak++;
         }
         if (EKF_baro_reject_streak >= EKF_GUARD_BARO_REJECT_N) {
+            if ((EKF_health_bits & EKF_HB_BARO_DIVERGE) == 0U) {
+                EKF_diverge_since_tick = HAL_GetTick();
+            }
             EKF_health_bits |= EKF_HB_BARO_DIVERGE;
+
+            /* P1：發散自救 —— DIVERGE 持續 >3s 且 baro 仍持續供數
+             * （sensor_health 若標 BMP388 故障則 has_baro=0、根本不會進到這裡，
+             * 故此時 baro 本身可信）→ 垂直通道重置：高度拍至當下 baro、垂直
+             * 速度歸零（P 放大讓 200Hz 量測在 ~0.3s 內重新拉出真實速度）、
+             * P 的 z/vz 行列重設 —— 讓濾波器重新收斂而非永久降級。
+             * 不清 DIVERGE 位：之後 baro 被接受時自然清除（innovation 已歸零；
+             * z_history 群延遲補償殘留的 ≤20 筆舊預測會再拒收 ~100ms，無妨）。 */
+            if ((HAL_GetTick() - EKF_diverge_since_tick) > EKF_GUARD_DIVERGE_RESET_MS) {
+                EKF_x[2] = baro_alt;
+                EKF_x[5] = 0.0f;
+                for (int i = 0; i < 6; i++) {
+                    EKF_P[2][i] = 0.0f; EKF_P[i][2] = 0.0f;
+                    EKF_P[5][i] = 0.0f; EKF_P[i][5] = 0.0f;
+                }
+                EKF_P[2][2] = 5.0f;     /* 與 EKF_HotRestartRestore 相同的空中高度不確定度 */
+                EKF_P[5][5] = 100.0f;   /* 速度未知（σ=10m/s），讓量測快速重建 */
+                EKF_baro_reject_streak = 0;
+                EKF_diverge_since_tick = HAL_GetTick();   /* 若再度發散，重新計時 3s */
+                printf("[EKF] ⚠️ BARO_DIVERGE >3s — vertical channel reset (alt -> baro %.1f m)\r\n",
+                       baro_alt);
+            }
         }
         return;
     }
