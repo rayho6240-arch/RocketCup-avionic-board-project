@@ -68,3 +68,21 @@ Release/
 *.hex
 *.bin
 *.list
+
+# --- 報價單與清點工具 ---
+checklist.html
+# --- serial 監聽日誌（gui_monitor / 連續監聽輸出，動輒數 MB） ---
+*.log
+
+# --- KiCad 自動備份 ---
+*_autosave*
+
+# --- BOM 產出目錄 ---
+bom/
+
+# --- host 單元測試編譯產物（tests/Makefile BINS） ---
+tests/test_sensor_axis
+tests/test_fsm
+tests/test_ekf_guard
+tests/test_sensor_health
+tests/test_telemetry

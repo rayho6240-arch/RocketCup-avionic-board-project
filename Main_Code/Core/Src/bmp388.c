@@ -16,6 +16,18 @@
 /* --- 官方 API 所需的 device 實體 --- */
 static struct bmp3_dev bmp_dev;
 
+/* === 高度換算物理常數 (Item H) === */
+#define BMP388_SEA_LEVEL_PA   101325.0f   /* 參考氣壓；相對高度計算時會完全抵銷，僅作為絕對值零點 */
+#define BMP388_R_SPECIFIC     287.052874f /* 乾空氣比氣體常數 J/(kg·K) */
+#define BMP388_GRAVITY        9.80665f    /* 標準重力加速度 m/s² */
+
+/* === 高度換算參考溫度 (Item H) ===
+ * 預設 ISA 標準海平面溫度 288.15 K (15°C)；開機自檢時由 BMP388_SetReferenceTemp()
+ * 以實測發射台溫度鎖定，鎖定後全程固定不變。確保 EKF 的 launchpad 參考與飛行讀數
+ * 共用同一個 T0 → 相對高度 (baro_alt - launchpad) 在發射台恆為 0 且全程連續，
+ * 不會在校準完成瞬間產生階躍，故不影響 FSM 頂點偵測。 */
+static float bmp388_ref_temp_K = 288.15f;
+
 /* --- SPI 低階通訊與延時回調函式實作 --- */
 
 static BMP3_INTF_RET_TYPE BMP388_SPI_Read(uint8_t reg_addr, uint8_t *read_data, uint32_t len, void *intf_ptr)
@@ -158,11 +170,26 @@ HAL_StatusTypeDef BMP388_ReadData(SPI_HandleTypeDef *hspi, BMP388_Data_t *data)
     data->pressure = (float)sensor_data.pressure;
     data->temperature = (float)sensor_data.temperature;
     
-    // 換算為海拔高度 (以標準海平面氣壓 101325 Pa 為基準)
-    data->altitude = 44330.0f * (1.0f - powf(data->pressure / 101325.0f, 0.190295f));
-    
+    // 換算為高度：採用 hypsometric（等溫層）公式，以鎖定的發射台溫度 T0 修正高度尺度。
+    //   h = (R / g) · T0 · ln(P0 / P)
+    // P0 (BMP388_SEA_LEVEL_PA) 僅為絕對值零點，相對高度 (baro_alt - launchpad) 計算時會抵銷；
+    // 真正影響相對高度尺度的是 T0：高溫環境 T0 較大 → 同一壓降對應更大的實際高度。
+    // 原 ISA 定溫公式 (44330·(1-(P/P0)^0.190295)) 固定假設 15°C，於高/低溫環境會有數 % 的尺度誤差 (Item H)。
+    data->altitude = (BMP388_R_SPECIFIC / BMP388_GRAVITY) * bmp388_ref_temp_K
+                     * logf(BMP388_SEA_LEVEL_PA / data->pressure);
+
     // 診斷暫存器讀取在正常運行中省略，以避免不必要的 SPI 傳輸 overhead
     // 如需診斷，可手動呼叫 bmp3_get_regs(BMP3_REG_ERR, ...) 等
-    
+
     return HAL_OK;
+}
+
+/* 以實測發射台溫度 (°C) 鎖定高度換算參考溫度 T0。
+ * 僅接受 BMP388 合理工作範圍 (-40~85°C) 的讀數以過濾開機異常值；超出範圍則維持
+ * 預設 288.15 K（行為等同未修正）。必須在 EKF 校準前呼叫一次，之後不應再變更 (Item H)。 */
+void BMP388_SetReferenceTemp(float temp_c)
+{
+    if (temp_c >= -40.0f && temp_c <= 85.0f) {
+        bmp388_ref_temp_K = temp_c + 273.15f;
+    }
 }

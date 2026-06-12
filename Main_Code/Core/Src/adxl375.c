@@ -89,22 +89,20 @@ HAL_StatusTypeDef ADXL375_ReadData(SPI_HandleTypeDef *hspi, ADXL375_Data_t *data
 
     if (status != HAL_OK) return status;
 
-    // 解析原始 16-bit 補碼數據 (LSB + MSB，跳過 rx_data[0] 的 address)
-    data->x_raw = (int16_t)((rx_data[2] << 8) | rx_data[1]);
-    data->y_raw = (int16_t)((rx_data[4] << 8) | rx_data[3]);
-    data->z_raw = (int16_t)((rx_data[6] << 8) | rx_data[4]); // Note: rx_data[5] was missed in previous write, let's fix it!
-    
-    // Correct indices:
-    // rx_data[0] = dummy/addr echo
-    // rx_data[1] = DATAX0, rx_data[2] = DATAX1
-    // rx_data[3] = DATAY0, rx_data[4] = DATAY1
-    // rx_data[5] = DATAZ0, rx_data[6] = DATAZ1
+    // 解析原始 16-bit 補碼數據 (LSB + MSB，跳過 rx_data[0] 的 address echo)
+    //   rx_data[0] = dummy/addr echo
+    //   rx_data[1] = DATAX0 (LSB), rx_data[2] = DATAX1 (MSB)
+    //   rx_data[3] = DATAY0 (LSB), rx_data[4] = DATAY1 (MSB)
+    //   rx_data[5] = DATAZ0 (LSB), rx_data[6] = DATAZ1 (MSB)
     data->x_raw = (int16_t)((rx_data[2] << 8) | rx_data[1]);
     data->y_raw = (int16_t)((rx_data[4] << 8) | rx_data[3]);
     data->z_raw = (int16_t)((rx_data[6] << 8) | rx_data[5]);
 
     // 根據說明書，ADXL375 的解析度固定為 49mg/LSB = 0.049g/LSB
-    // 備註：因 PCB 上標示相反，實際使用解算時 X 與 Y 應取負值以做軸向修正
+    // 軸向備註：PCB 標示與感測器晶片本體 X/Y 相反。為與 BMI088 一致，本驅動「不」在此
+    // 做軸向取負——BMI088 同樣於驅動層輸出感測器原生軸（軸反向修正集中於 EKF 處理），
+    // 故 Flash log 內 ADXL 與 BMI 的 raw 皆為感測器原生座標、約定一致。若日後 ADXL 融入
+    // EKF（改善項目 A），於 EKF 饋入處比照 BMI088 套用相同的 X/Y 取負即可。
     data->ax = (float)data->x_raw * 0.049f;
     data->ay = (float)data->y_raw * 0.049f;
     data->az = (float)data->z_raw * 0.049f;

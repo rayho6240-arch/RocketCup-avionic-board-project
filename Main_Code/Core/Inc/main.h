@@ -31,12 +31,12 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "fsm.h"   /* FlightState_t 與 FSM 參數（P0-A 抽離至純邏輯模組） */
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+/* FlightState_t 已移至 fsm.h（host 可測純邏輯模組，P0-A） */
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -129,7 +129,8 @@ void Error_Handler(void);
 #define CSB_LORA920_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
-
+/* TARGET_MAIN_ALTITUDE / MAIN_DEPLOY_DELAY_S / DROGUE_LEAD_TIME_S 已移至 fsm.h（P0-A） */
+#define SD_LANDED_LOG_TIMEOUT_MS 1800000UL  // 落地後 SD 持續記錄上限 (30 分鐘)，逾時自動關檔
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
