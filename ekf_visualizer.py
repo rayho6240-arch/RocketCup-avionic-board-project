@@ -19,6 +19,8 @@ except ImportError as e:
     print("Please install them using: pip install pyserial matplotlib")
     sys.exit(1)
 
+import serial_link   # P3：port/baud 預設與自動偵測統一於此
+
 # Regex to parse the [TELE] telemetry lines
 # Example: [TELE] pos:0.012,-0.045,245.320 vel:0.005,-0.010,45.120 q:0.999,0.002,-0.001,0.015
 tele_pattern = re.compile(
@@ -58,8 +60,7 @@ def serial_reader(port_name, baud_rate):
     global latest_pos, latest_vel, latest_q, is_running
     print(f"[Serial] Opening port {port_name} at {baud_rate} baud...")
     try:
-        ser = serial.Serial(port_name, baud_rate, timeout=1.0)
-        ser.reset_input_buffer()
+        ser = serial_link.open_serial(port_name, baud_rate, timeout=1.0)
     except Exception as e:
         print(f"[Serial] Failed to open port: {e}")
         return
@@ -323,9 +324,10 @@ def run_visualization():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Avionics 3D EKF Real-Time Serial Visualizer")
     parser.add_argument("--port", type=str, default="AUTO", help="Serial port (e.g. /dev/tty.usbmodem10)")
-    parser.add_argument("--baud", type=int, default=460800, help="Baud rate (default: 460800)")
+    parser.add_argument("--baud", type=int, default=serial_link.DEFAULT_BAUD,
+                        help=f"Baud rate (default: {serial_link.DEFAULT_BAUD})")
     parser.add_argument("--sim", action="store_true", help="Run in offline simulation mode instead of reading serial")
-    
+
     args = parser.parse_args()
 
     # Launch Simulation or Serial thread
@@ -333,35 +335,13 @@ if __name__ == "__main__":
         sim_thread = threading.Thread(target=simulation_worker, daemon=True)
         sim_thread.start()
     else:
-        # Auto-detect serial port if not specified
-        port = args.port
-        if port.upper() == "AUTO":
-            import os
-            # On macOS, prioritize the known working cu.usbserial-110 bridge
-            if os.path.exists("/dev/cu.usbserial-110"):
-                port = "/dev/cu.usbserial-110"
-            else:
-                ports = list(serial.tools.list_ports.comports())
-                usb_ports = []
-                for p in ports:
-                    dev = p.device
-                    # Prioritize actual USB-to-UART bridges, avoiding Bluetooth devices
-                    if any(kw in dev.lower() for kw in ["usb", "ch34", "cp210", "ftdi", "uart"]):
-                        if sys.platform == "darwin" and "tty." in dev:
-                            dev = dev.replace("tty.", "cu.")
-                        usb_ports.append(dev)
-                
-                if usb_ports:
-                    port = usb_ports[0]
-                elif ports:
-                    port = ports[0].device
-                    if sys.platform == "darwin" and "tty." in port:
-                        port = port.replace("tty.", "cu.")
-                else:
-                    print("[Error] No active COM/Serial ports detected!")
-                    print("Please plug in the STM32 board or run simulation mode: python ekf_visualizer.py --sim")
-                    sys.exit(1)
-            
+        # 自動偵測統一走 serial_link（原本此處有一套獨立的 AUTO 偵測實作）
+        port = serial_link.resolve_port(args.port)
+        if port is None:
+            print("[Error] No active COM/Serial ports detected!")
+            print("Please plug in the STM32 board or run simulation mode: python ekf_visualizer.py --sim")
+            sys.exit(1)
+        if args.port.upper() == "AUTO":
             print(f"[COM] Auto-selected active serial port: {port}")
 
         serial_thread = threading.Thread(target=serial_reader, args=(port, args.baud), daemon=True)

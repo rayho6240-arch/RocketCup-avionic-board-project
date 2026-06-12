@@ -24,6 +24,8 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyserial"])
     import serial
 
+import serial_link   # P3：port/baud 預設與自動偵測統一於此
+
 # ==================== 配置參數 ====================
 COMPILER_PATH = "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.macos64_1.0.0.202411102158/tools/bin"
 DEBUG_DIR = "/Users/laizhiquan/coding/RocketCom/Main_Code/Debug"
@@ -32,8 +34,8 @@ ELF_FILE = f"{DEBUG_DIR}/Main_AV_F407.elf"
 PROGRAMMER_CLI = "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_2.2.200.202503041107/tools/bin/STM32_Programmer_CLI"
 ST_LINK_SN = "35FF67065057393437231143"
 
-SERIAL_PORT = "/dev/cu.usbserial-110"
-BAUD_RATE = 460800
+SERIAL_PORT = serial_link.resolve_port()   # 自動偵測（--port 可覆蓋）
+BAUD_RATE = serial_link.DEFAULT_BAUD
 TEST_DURATION = 30  # 完整 HIL 測試監聽時間 (秒)
 MONITOR_DURATION = 0   # --monitor 模式持續時間 (秒，0 = 無限)
 
@@ -164,7 +166,7 @@ def monitor_debug(duration_s=0):
         print(col(CYAN, "  " + "─"*56))
 
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.5)
+        ser = serial_link.open_serial(SERIAL_PORT, BAUD_RATE, timeout=0.5)
         print(f"  串口已開啟。等待 MCU 資料...\n")
         start = time.time()
         last_summary = time.time()
@@ -371,7 +373,7 @@ def monitor_serial_and_verify():
     t0_boot = time.time()
 
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        ser = serial_link.open_serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         start_time = time.time()
         print("  接收遙測中...")
 

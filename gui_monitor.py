@@ -56,9 +56,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 
+import serial_link   # P3：port/baud 預設與自動偵測統一於此
+
 # ==================== 2. 全域配置參數 ====================
-DEFAULT_BAUD = 460800
-DEFAULT_PORT = "/dev/cu.usbserial-110"
+DEFAULT_BAUD = serial_link.DEFAULT_BAUD
+DEFAULT_PORT = serial_link.PREFERRED_PORT
 
 # ==================== 3. 3D 幾何生成工具 ====================
 def generate_rocket_geometry(r=0.25, h_body=1.8, h_nose=0.8):
@@ -371,15 +373,10 @@ class RocketDashboardApp:
 
     # ------------------ UI 操作函數 ------------------
     def scan_ports(self):
-        """自動偵測可用串口"""
-        ports = [p.device for p in serial.tools.list_ports.comports()]
+        """自動偵測可用串口（偵測優先序統一在 serial_link.auto_port）"""
+        ports = serial_link.list_candidate_ports()
         self.port_combo['values'] = ports
-        if ports:
-            # 優先選擇 cu.usbserial 系列
-            usb_port = next((p for p in ports if "usbserial" in p.lower() or "usbmodem" in p.lower()), ports[0])
-            self.port_combo.set(usb_port)
-        else:
-            self.port_combo.set(DEFAULT_PORT)
+        self.port_combo.set(serial_link.auto_port() or DEFAULT_PORT)
 
     def clear_console(self):
         self.console.delete("1.0", tk.END)
@@ -409,7 +406,7 @@ class RocketDashboardApp:
                 baud = DEFAULT_BAUD
                 
             try:
-                self.ser = serial.Serial(port, baud, timeout=0.5)
+                self.ser = serial_link.open_serial(port, baud, timeout=0.5)
             except Exception as e:
                 messagebox.showerror("串口連線失敗", f"無法開啟 {port}，請檢查硬體接線！\n錯誤: {e}")
                 return
