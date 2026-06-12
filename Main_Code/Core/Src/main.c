@@ -108,6 +108,10 @@ FlightState_t current_fsm_state = STATE_INIT;   /* 由 FSM 包裝層自 g_fsm_ct
 uint32_t flight_start_tick = 0;                 /* 同上；速度歷史 last_vel_z 已收入 FSM_Context_t */
 uint8_t sd_logging_active = 0;
 
+/* P1：任務堆疊水位觀測用 handle（defaultTask 用 CubeMX 既有的 defaultTaskHandle） */
+static osThreadId_t g_ekf_task_handle  = NULL;
+static osThreadId_t g_lora_task_handle = NULL;
+
 /* P0-D：感測器健康監測（失流/卡死/範圍）。彙整位 SH_BIT_* 供 FSM/遙測/[HEALTH] 行。 */
 static SensorMon_t g_mon_bmi088;
 static SensorMon_t g_mon_adxl375;
@@ -397,7 +401,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
+  g_ekf_task_handle = osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
 #ifdef ENABLE_DIAGNOSTICS
   static const osThreadAttr_t diagnosticTask_attributes = {
     .name = "diagTask",
@@ -413,7 +417,7 @@ int main(void)
     .stack_size = 512 * 4,
     .priority = (osPriority_t) osPriorityLow,
   };
-  osThreadNew(LoRaTelemetry_Task, NULL, &loraTelemTask_attributes);
+  g_lora_task_handle = osThreadNew(LoRaTelemetry_Task, NULL, &loraTelemTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -2391,6 +2395,15 @@ void StartDefaultTask(void *argument)
     if (tick % 1000 == 0) {
         printf("[HEALTH] sens=0x%02X ekf=0x%02X\r\n",
                (unsigned)g_sensor_fault_bits, (unsigned)EKF_GetHealthBits());
+    }
+
+    /* === P1：0.2Hz 任務堆疊水位（osThreadGetStackSpace = 歷史最低剩餘 bytes）。
+     * 值逼近 0 = 溢位前兆；HIL 斷言每個任務 ≥256 bytes 餘裕。 === */
+    if (tick % 5000 == 0) {
+        printf("[STACK] main=%lu ekf=%lu lora=%lu\r\n",
+               (unsigned long)(defaultTaskHandle ? osThreadGetStackSpace(defaultTaskHandle) : 0),
+               (unsigned long)(g_ekf_task_handle ? osThreadGetStackSpace(g_ekf_task_handle) : 0),
+               (unsigned long)(g_lora_task_handle ? osThreadGetStackSpace(g_lora_task_handle) : 0));
     }
 
     /* === 感測器狀態 LED（每 100ms 更新）===

@@ -367,6 +367,7 @@ def monitor_serial_and_verify():
     loop_max_us_seen = 0      # [LOOP] max_us 全程最大值
     flash_pool_first = None   # [FLASH] pool 首見值
     flash_pool_last  = None   # [FLASH] pool 最後值
+    stack_min = {}            # [STACK] 各任務歷史最低剩餘 bytes
     t0_boot = time.time()
 
     try:
@@ -420,6 +421,12 @@ def monitor_serial_and_verify():
                     val = int(mp.group(1))
                     if flash_pool_first is None: flash_pool_first = val
                     flash_pool_last = val
+
+                # ── P1：[STACK] main=N ekf=N lora=N（0.2Hz，歷史最低剩餘 bytes） ──
+                ms = re.search(r"\[STACK\]\s*main=(\d+)\s*ekf=(\d+)\s*lora=(\d+)", line)
+                if ms:
+                    for name, v in zip(("main", "ekf", "lora"), map(int, ms.groups())):
+                        stack_min[name] = min(stack_min.get(name, 1 << 30), v)
 
         ser.close()
     except Exception as e:
@@ -484,6 +491,17 @@ def monitor_serial_and_verify():
         if not grew: failures.append(f"[FLASH] pool 增長停滯 ({flash_pool_first}→{flash_pool_last})")
     else:
         print("  ⚠️ 未收到 [FLASH] pool 行（韌體版本過舊?）")
+
+    # ── P1：[STACK] 任務堆疊餘裕（歷史最低剩餘 ≥256 bytes，逼近 0 = 溢位前兆） ──
+    if stack_min:
+        worst = min(stack_min.values())
+        stack_ok = worst >= 256
+        sym = "✅" if stack_ok else "❌"
+        detail = " ".join(f"{k}={v}" for k, v in stack_min.items())
+        print(f"  {sym} [STACK] 最低剩餘 {detail} bytes")
+        if not stack_ok: failures.append(f"[STACK] 堆疊餘裕不足 ({detail})")
+    else:
+        print("  ⚠️ 未收到 [STACK] 行（韌體版本過舊?）")
 
     if failures:
         print(col(RED, "\n❌ FAILED"))
