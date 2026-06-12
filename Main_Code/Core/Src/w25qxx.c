@@ -456,14 +456,12 @@ static uint16_t s_ring_seq          = 0;
 static volatile uint8_t  s_ring_erase_allowed = 1;  /* P0-E：0 = 飛行中禁同步擦除 */
 static volatile uint32_t s_ring_drop_count    = 0;  /* P0-E：池耗盡丟棄計數 */
 
-/* P0-E：目前預擦池大小（bytes；exclusive-end 環形語意與 write/erase 指標一致） */
+/* P0-E：目前預擦池大小（bytes）。位址數學統一在 flash_ring_math.h（host 已測）；
+ * erased_end 採正規化語意（恆 ∈ [BASE, END]），修復舊版 END+1 瞬時態在寫入指標
+ * 迴繞後產生整環假池量、導致後續寫入全落未擦區的資料損毀 bug。 */
 static uint32_t ring_pool_bytes(void)
 {
-    if (s_ring_erased_end >= s_ring_write_addr) {
-        return s_ring_erased_end - s_ring_write_addr;
-    }
-    return (FLASH_RINGBUF_END + 1UL - s_ring_write_addr) +
-           (s_ring_erased_end - FLASH_RINGBUF_ADDR);
+    return ring_pool_bytes_calc(s_ring_write_addr, s_ring_erased_end);
 }
 
 uint16_t ring_crc16(const uint8_t *data, uint16_t len)
@@ -522,8 +520,7 @@ void FlashRing_Init(void)
         W25QXX_EraseSector(erase_addr);
         HAL_IWDG_Refresh(&hiwdg);
         printf("[FLASH_RING] Pre-erase %2d/%d @ 0x%06lX\r\n", i + 1, FLASH_RING_PREERASE_N, erase_addr);
-        erase_addr += W25QXX_SECTOR_SIZE;
-        if (erase_addr > FLASH_RINGBUF_END) erase_addr = FLASH_RINGBUF_ADDR;
+        erase_addr = ring_erase_advance(erase_addr);
     }
     s_ring_erased_end   = erase_addr;
     s_ring_packet_count = 0;
@@ -549,15 +546,15 @@ W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
             }
             return W25QXX_ERR_NO_POOL;
         }
-        W25QXX_StatusTypeDef ret = W25QXX_EraseSector(s_ring_erased_end);
+        uint32_t target = ring_erase_target(s_ring_erased_end);
+        W25QXX_StatusTypeDef ret = W25QXX_EraseSector(target);
         HAL_IWDG_Refresh(&hiwdg);
         if (ret != W25QXX_OK) {
             printf("[FLASH_RING] Rolling erase FAILED @ 0x%06lX, err=%d\r\n",
-                   s_ring_erased_end, (int)ret);
+                   target, (int)ret);
             return ret;
         }
-        s_ring_erased_end += W25QXX_SECTOR_SIZE;
-        if (s_ring_erased_end > FLASH_RINGBUF_END + 1) s_ring_erased_end = FLASH_RINGBUF_ADDR;
+        s_ring_erased_end = ring_erase_advance(s_ring_erased_end);
     }
 
     /* 填入欄位，計算 CRC（覆蓋 bytes [0..77]） */
@@ -576,9 +573,7 @@ W25QXX_StatusTypeDef FlashRing_WritePacket(FlashRingPacket_t *pkt)
         return ret;
     }
 
-    s_ring_write_addr += FLASH_RING_PACKET_SIZE;
-    if (s_ring_write_addr + FLASH_RING_PACKET_SIZE > FLASH_RINGBUF_END + 1)
-        s_ring_write_addr = FLASH_RINGBUF_ADDR;
+    s_ring_write_addr = ring_write_advance(s_ring_write_addr);
 
     s_ring_packet_count++;
 
@@ -606,13 +601,11 @@ uint8_t FlashRing_PreEraseOne(void)
     if (ring_pool_bytes() >= (uint32_t)FLASH_RING_PREERASE_TARGET * W25QXX_SECTOR_SIZE) {
         return 1U;   /* 池已達標 */
     }
-    /* exclusive-end 語意：erased_end 可能停在 FLASH_RINGBUF_END+1，先迴繞再擦 */
-    uint32_t target = (s_ring_erased_end > FLASH_RINGBUF_END)
-                      ? FLASH_RINGBUF_ADDR : s_ring_erased_end;
+    uint32_t target = ring_erase_target(s_ring_erased_end);
     if (W25QXX_EraseSector(target) != W25QXX_OK) {
         return 0U;   /* 擦除失敗：下次再試 */
     }
-    s_ring_erased_end = target + W25QXX_SECTOR_SIZE;
+    s_ring_erased_end = ring_erase_advance(s_ring_erased_end);
     return 0U;
 }
 
@@ -630,15 +623,7 @@ W25QXX_StatusTypeDef FlashRing_GetLastPacket(FlashRingPacket_t *pkt)
 {
     if (pkt == NULL) return W25QXX_ERR_PARAM;
 
-    uint32_t last_write_addr = s_ring_write_addr;
-    uint32_t last_packet_addr;
-
-    // 處理環形邊界 wrap-around
-    if (last_write_addr == FLASH_RINGBUF_ADDR) {
-        last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
-    } else {
-        last_packet_addr = last_write_addr - FLASH_RING_PACKET_SIZE;
-    }
+    uint32_t last_packet_addr = ring_last_packet_addr(s_ring_write_addr);
 
     // 從 Flash 中讀取最後一個封包
     W25QXX_StatusTypeDef ret = W25QXX_ReadData(last_packet_addr, (uint8_t*)pkt, FLASH_RING_PACKET_SIZE);
@@ -659,22 +644,8 @@ W25QXX_StatusTypeDef FlashRing_GetSecondLastPacket(FlashRingPacket_t *pkt)
 {
     if (pkt == NULL) return W25QXX_ERR_PARAM;
 
-    uint32_t last_write_addr = s_ring_write_addr;
-    uint32_t last_packet_addr;
-
-    // 處理環形邊界 wrap-around
-    if (last_write_addr == FLASH_RINGBUF_ADDR) {
-        last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
-    } else {
-        last_packet_addr = last_write_addr - FLASH_RING_PACKET_SIZE;
-    }
-
-    uint32_t second_last_packet_addr;
-    if (last_packet_addr == FLASH_RINGBUF_ADDR) {
-        second_last_packet_addr = FLASH_RINGBUF_END + 1 - FLASH_RING_PACKET_SIZE;
-    } else {
-        second_last_packet_addr = last_packet_addr - FLASH_RING_PACKET_SIZE;
-    }
+    uint32_t second_last_packet_addr =
+        ring_prev_packet_addr(ring_last_packet_addr(s_ring_write_addr));
 
     // 從 Flash 中讀取倒數第二個封包
     W25QXX_StatusTypeDef ret = W25QXX_ReadData(second_last_packet_addr, (uint8_t*)pkt, FLASH_RING_PACKET_SIZE);

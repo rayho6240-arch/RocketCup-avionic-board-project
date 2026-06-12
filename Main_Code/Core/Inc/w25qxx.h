@@ -198,17 +198,12 @@ void Flash_Test(void);
  *       Page Write (1.5ms，不阻塞主任務) 寫入。開機時預先擦除前 10 個 Sector，
  *       並在寫入接近邊界時以背景滾動預擦方式確保寫入不被擦除阻塞。
  * ============================================================ */
-#define FLASH_RINGBUF_ADDR       0x010000UL   /* Ring Buffer 起始（64KB 對齊） */
-#define FLASH_RINGBUF_END        0xFFFFFFUL   /* Ring Buffer 結束 */
-#define FLASH_RINGBUF_SIZE       0xFF0000UL   /* ~15.9 MB */
-#define FLASH_RING_PACKET_SIZE   80UL         /* 每筆封包大小調整為 80 bytes */
-#define FLASH_RING_PREERASE_N    10           /* 開機預擦 Sector 數量 */
-
-/* P0-E：PAD 期背景預擦目標池。64 sectors × 51 封包 ÷ 50Hz ≈ 65s 飛行容量（>2× 全程）。
- * 飛行態（BOOST..MAIN_DEPLOY）禁止同步滾動擦除（最壞 ~400ms 阻塞主迴圈，FSM 停擺、
- * EKF 斷饋且持 SPI3 mutex）—— 池耗盡時丟棄該筆並計數（遙測可觀測）。
- * ⚠️ 飛行時間 >60s 的任務需加大此值，並於發射檢核表確認 [FLASH] pool 達標後才起飛。 */
-#define FLASH_RING_PREERASE_TARGET 64U        /* PAD 期背景預擦目標（sectors） */
+/* 環形緩衝區幾何常數與位址數學已抽至 flash_ring_math.h（P1，host 可測，
+ * tests/test_flash_ring.c）：FLASH_RINGBUF_ADDR/END/SIZE、FLASH_RING_PACKET_SIZE、
+ * FLASH_RING_PREERASE_N/TARGET 皆定義於該檔。 */
+#include "flash_ring_math.h"
+_Static_assert(FLASH_RING_SECTOR_SIZE == W25QXX_SECTOR_SIZE,
+               "flash_ring_math.h 擦除粒度必須與 W25QXX_SECTOR_SIZE 一致");
 
 /* ============================================================
  *  結構體定義

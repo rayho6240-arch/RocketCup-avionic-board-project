@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../Main_Code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm test_ekf_guard test_sensor_health test_telemetry test_gps
+BINS := test_sensor_axis test_fsm test_ekf_guard test_sensor_health test_telemetry test_gps test_flash_ring
 
 .PHONY: run clean
 
@@ -32,6 +32,9 @@ test_telemetry: test_telemetry.c ../Main_Code/Core/Inc/telemetry.h ../Main_Code/
 
 test_gps: test_gps.c ../Main_Code/Core/Inc/gps_parse.h
 	$(CC) $(CFLAGS) -o $@ test_gps.c $(LDLIBS)
+
+test_flash_ring: test_flash_ring.c ../Main_Code/Core/Inc/flash_ring_math.h
+	$(CC) $(CFLAGS) -o $@ test_flash_ring.c $(LDLIBS)
 
 clean:
 	rm -f $(BINS)
