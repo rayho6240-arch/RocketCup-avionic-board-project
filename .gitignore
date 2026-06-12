@@ -86,3 +86,5 @@ tests/test_fsm
 tests/test_ekf_guard
 tests/test_sensor_health
 tests/test_telemetry
+tests/test_gps
+tests/test_flash_ring

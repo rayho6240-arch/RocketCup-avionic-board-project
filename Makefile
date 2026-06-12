@@ -5,6 +5,7 @@
 #    make flash      — compile + upload via ST-Link
 #    make monitor    — open serial monitor (Ctrl+A K to quit)
 #    make all        — compile + flash + monitor
+#    make host-test  — run all host unit tests (no board needed)
 #    make clean      — remove build artifacts
 # ============================================================
 
@@ -23,7 +24,7 @@ BAUD      := 460800
 
 # ============================================================
 
-.PHONY: build flash monitor all clean
+.PHONY: build flash monitor all clean host-test
 
 ## Default target: compile only
 build:
@@ -44,6 +45,11 @@ monitor:
 ## Compile + flash + monitor
 all: flash monitor
 
+## Run all host unit tests (pure-logic headers, no HAL / board needed)
+host-test:
+	$(MAKE) -C tests run
+
 ## Remove build artifacts
 clean:
 	$(MAKE) -C $(BUILD_DIR) clean
+	$(MAKE) -C tests clean

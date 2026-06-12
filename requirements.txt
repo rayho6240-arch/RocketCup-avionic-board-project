@@ -1,0 +1,6 @@
+# RocketCom Python 工具相依（test_runner.py / gui_monitor.py / ekf_visualizer.py /
+# GroundStation/telemetry_decoder.py）。釘到已驗證可用的版本下限。
+#   pip3 install -r requirements.txt
+pyserial>=3.5
+numpy>=1.26
+matplotlib>=3.8
