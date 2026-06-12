@@ -50,26 +50,14 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LED_debug_Pin|INT_Magn_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(RST_GPS_GPIO_Port, RST_GPS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPS_debug_Pin|Magn_debug_Pin|INT_Magn_Pin|RST_GPS_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : LED_debug_Pin */
-  GPIO_InitStruct.Pin = LED_debug_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_debug_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : INT_Magn_Pin RST_GPS_Pin */
-  GPIO_InitStruct.Pin = INT_Magn_Pin|RST_GPS_Pin;
+  /*Configure GPIO pins : GPS_debug_Pin Magn_debug_Pin INT_Magn_Pin RST_GPS_Pin */
+  GPIO_InitStruct.Pin = GPS_debug_Pin|Magn_debug_Pin|INT_Magn_Pin|RST_GPS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* If the GPS reset input requires open-drain with an external pull-up,
-     change only this pin's CubeMX GPIO mode accordingly. The current firmware
-     assumes a push-pull output driving active-low reset high to release. */
 
 }
 

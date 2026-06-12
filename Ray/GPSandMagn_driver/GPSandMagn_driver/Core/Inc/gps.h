@@ -5,26 +5,23 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+typedef struct __UART_HandleTypeDef UART_HandleTypeDef;
 
 #define GPS_NMEA_BUFFER_SIZE            (128U)
 
-extern volatile uint32_t gps_rx_byte_count;
-extern volatile uint32_t gps_rx_callback_count;
-extern volatile bool gps_byte_received_flag;
-extern volatile bool gps_uart_error_flag;
+typedef struct
+{
+  char sentence[GPS_NMEA_BUFFER_SIZE];
+  uint16_t length;
+  uint32_t timestamp_ms;
+  bool valid;
+} GPS_RawData_t;
 
-bool GPS_Init(void);
-void GPS_ResetPin_InitState(void);
-void GPS_ReleaseReset(void);
-void GPS_HoldReset(void);
-void GPS_ProcessByte(uint8_t byte);
-bool GPS_HasReceivedByte(void);
-void GPS_ClearReceivedByteFlag(void);
-bool GPS_HasNewSentence(void);
-void GPS_ClearNewSentenceFlag(void);
-void GPS_ClearUartErrorFlag(void);
+bool GPS_Init(UART_HandleTypeDef *huart);
+bool GPS_ReadData(GPS_RawData_t *data);
 
 #ifdef __cplusplus
 }

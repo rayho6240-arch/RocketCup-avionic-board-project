@@ -5,17 +5,17 @@ static void LED_BusyDelay(uint16_t delay_ms);
 
 void LED_On(void)
 {
-  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPS_debug_GPIO_Port, GPS_debug_Pin, GPIO_PIN_SET);
 }
 
 void LED_Off(void)
 {
-  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPS_debug_GPIO_Port, GPS_debug_Pin, GPIO_PIN_RESET);
 }
 
 void LED_Toggle(void)
 {
-  HAL_GPIO_TogglePin(LED_debug_GPIO_Port, LED_debug_Pin);
+  HAL_GPIO_TogglePin(GPS_debug_GPIO_Port, GPS_debug_Pin);
 }
 
 void LED_Blink(uint8_t times, uint16_t delay_ms)

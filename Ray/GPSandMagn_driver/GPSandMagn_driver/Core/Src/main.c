@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "gps.h"
+#include "mag.h"
 
 /* USER CODE END Includes */
 
@@ -36,15 +37,15 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define LED_GPS_RX_OK_BLINK_MS          (80U)
-#define LED_GPS_NO_RX_BLINK_TIMES       (3U)
-#define LED_GPS_NO_RX_BLINK_MS          (80U)
-#define GPS_ALIVE_BLINK_PERIOD_MS       (1000U)
-#define GPS_NO_RX_TIMEOUT_MS            (10000U)
+#define LED_SLOW_BLINK_MS               (80U)
+#define LED_FAST_BLINK_MS               (80U)
+#define LED_FAST_BLINK_TIMES            (3U)
+#define GPS_NO_DATA_TIMEOUT_MS          (10000U)
+#define MAG_READ_PERIOD_MS              (500U)
+#define GPS_RESET_RELEASE_DELAY_MS      (500U)
 #define LED_ACTIVE_HIGH                 (1U)
 #define LED_ACTIVE_LOW                  (0U)
 #define LED_ACTIVE_POLARITY             LED_ACTIVE_HIGH
-//123
 
 #if (LED_ACTIVE_POLARITY == LED_ACTIVE_HIGH)
 #define LED_ON_STATE                    GPIO_PIN_SET
@@ -64,18 +65,23 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint32_t last_gps_rx_byte_count;
-static uint32_t last_gps_rx_time_ms;
-static uint32_t last_gps_alive_blink_ms;
+static bool gps_ok;
+static bool mag_ok;
+static uint32_t last_gps_sentence_ms;
+static uint32_t last_mag_read_ms;
+static GPS_RawData_t gps_raw;
+static MAG_RawData_t mag_raw;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static void LED_On(void);
-static void LED_Off(void);
-static void LED_Blink(uint8_t times, uint16_t delay_ms);
+static void LED_On(GPIO_TypeDef *port, uint16_t pin);
+static void LED_Off(GPIO_TypeDef *port, uint16_t pin);
+static void LED_BlinkSlow(GPIO_TypeDef *port, uint16_t pin);
+static void LED_BlinkFast3(GPIO_TypeDef *port, uint16_t pin);
+static void GPS_ResetReleasePin(void);
 
 /* USER CODE END PFP */
 
@@ -113,18 +119,37 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  GPS_ReleaseReset();
-  HAL_Delay(500U);
+  GPS_ResetReleasePin();
+  HAL_Delay(GPS_RESET_RELEASE_DELAY_MS);
   MX_DMA_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  LED_Off();
-  (void)GPS_Init();
-  last_gps_rx_byte_count = gps_rx_byte_count;
-  last_gps_rx_time_ms = HAL_GetTick();
-  last_gps_alive_blink_ms = HAL_GetTick();
-  LED_On();
+  LED_Off(GPS_debug_GPIO_Port, GPS_debug_Pin);
+  LED_Off(Magn_debug_GPIO_Port, Magn_debug_Pin);
+
+  gps_ok = GPS_Init(&huart1);
+  mag_ok = MAG_Init(&hi2c1);
+  last_gps_sentence_ms = HAL_GetTick();
+  last_mag_read_ms = HAL_GetTick();
+
+  if (gps_ok)
+  {
+    LED_On(GPS_debug_GPIO_Port, GPS_debug_Pin);
+  }
+  else
+  {
+    LED_Off(GPS_debug_GPIO_Port, GPS_debug_Pin);
+  }
+
+  if (mag_ok)
+  {
+    LED_On(Magn_debug_GPIO_Port, Magn_debug_Pin);
+  }
+  else
+  {
+    LED_Off(Magn_debug_GPIO_Port, Magn_debug_Pin);
+  }
 
   /* USER CODE END 2 */
 
@@ -132,23 +157,28 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (gps_rx_byte_count != last_gps_rx_byte_count)
+    if (gps_ok && GPS_ReadData(&gps_raw))
     {
-      last_gps_rx_byte_count = gps_rx_byte_count;
-      last_gps_rx_time_ms = HAL_GetTick();
+      last_gps_sentence_ms = HAL_GetTick();
+      LED_BlinkSlow(GPS_debug_GPIO_Port, GPS_debug_Pin);
+    }
+    else if (!gps_ok || ((HAL_GetTick() - last_gps_sentence_ms) > GPS_NO_DATA_TIMEOUT_MS))
+    {
+      LED_BlinkFast3(GPS_debug_GPIO_Port, GPS_debug_Pin);
+      last_gps_sentence_ms = HAL_GetTick();
     }
 
-    if ((HAL_GetTick() - last_gps_rx_time_ms) > GPS_NO_RX_TIMEOUT_MS)
+    if ((HAL_GetTick() - last_mag_read_ms) >= MAG_READ_PERIOD_MS)
     {
-      LED_Blink(LED_GPS_NO_RX_BLINK_TIMES, LED_GPS_NO_RX_BLINK_MS);
-      last_gps_alive_blink_ms = HAL_GetTick();
-    }
-    else if ((HAL_GetTick() - last_gps_alive_blink_ms) >= GPS_ALIVE_BLINK_PERIOD_MS)
-    {
-      last_gps_alive_blink_ms = HAL_GetTick();
-      LED_Off();
-      HAL_Delay(LED_GPS_RX_OK_BLINK_MS);
-      LED_On();
+      last_mag_read_ms = HAL_GetTick();
+      if (mag_ok && MAG_ReadData(&mag_raw))
+      {
+        LED_BlinkSlow(Magn_debug_GPIO_Port, Magn_debug_Pin);
+      }
+      else
+      {
+        LED_BlinkFast3(Magn_debug_GPIO_Port, Magn_debug_Pin);
+      }
     }
 
     /* USER CODE END WHILE */
@@ -179,29 +209,14 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-    RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
-    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-    {
-      Error_Handler();
-    }
+    Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  if (RCC_OscInitStruct.PLL.PLLState == RCC_PLL_ON)
-  {
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  }
-  else
-  {
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-  }
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
@@ -213,25 +228,37 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-static void LED_On(void)
+static void LED_On(GPIO_TypeDef *port, uint16_t pin)
 {
-  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, LED_ON_STATE);
+  HAL_GPIO_WritePin(port, pin, LED_ON_STATE);
 }
 
-static void LED_Off(void)
+static void LED_Off(GPIO_TypeDef *port, uint16_t pin)
 {
-  HAL_GPIO_WritePin(LED_debug_GPIO_Port, LED_debug_Pin, LED_OFF_STATE);
+  HAL_GPIO_WritePin(port, pin, LED_OFF_STATE);
 }
 
-static void LED_Blink(uint8_t times, uint16_t delay_ms)
+static void LED_BlinkSlow(GPIO_TypeDef *port, uint16_t pin)
 {
-  for (uint8_t index = 0U; index < times; index++)
+  LED_Off(port, pin);
+  HAL_Delay(LED_SLOW_BLINK_MS);
+  LED_On(port, pin);
+}
+
+static void LED_BlinkFast3(GPIO_TypeDef *port, uint16_t pin)
+{
+  for (uint8_t index = 0U; index < LED_FAST_BLINK_TIMES; index++)
   {
-    LED_On();
-    HAL_Delay(delay_ms);
-    LED_Off();
-    HAL_Delay(delay_ms);
+    LED_Off(port, pin);
+    HAL_Delay(LED_FAST_BLINK_MS);
+    LED_On(port, pin);
+    HAL_Delay(LED_FAST_BLINK_MS);
   }
+}
+
+static void GPS_ResetReleasePin(void)
+{
+  HAL_GPIO_WritePin(RST_GPS_GPIO_Port, RST_GPS_Pin, GPIO_PIN_SET);
 }
 
 /* USER CODE END 4 */

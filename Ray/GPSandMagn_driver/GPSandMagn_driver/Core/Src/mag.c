@@ -1,6 +1,6 @@
 #include "mag.h"
 
-#include "i2c.h"
+#include "main.h"
 #include <stddef.h>
 
 #define MAG_I2C_READY_TRIALS            (3U)
@@ -14,11 +14,23 @@
 #define MAG_XYZOUT2_Z_LSB_SHIFT         (2U)
 #define MAG_XYZOUT2_LSB_MASK            (0x03U)
 
-bool MAG_Init(void)
+static I2C_HandleTypeDef *mag_hi2c;
+
+static bool MAG_ReadProductID(uint8_t *id);
+static bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz);
+
+bool MAG_Init(I2C_HandleTypeDef *hi2c)
 {
   uint8_t product_id = 0U;
 
-  if (HAL_I2C_IsDeviceReady(&hi2c1,
+  if (hi2c == NULL)
+  {
+    return false;
+  }
+
+  mag_hi2c = hi2c;
+
+  if (HAL_I2C_IsDeviceReady(mag_hi2c,
                             MMC5983MA_I2C_ADDR,
                             MAG_I2C_READY_TRIALS,
                             MAG_I2C_TIMEOUT_MS) != HAL_OK)
@@ -34,14 +46,39 @@ bool MAG_Init(void)
   return (product_id == MMC5983MA_PRODUCT_ID_EXPECTED);
 }
 
-bool MAG_ReadProductID(uint8_t *id)
+bool MAG_ReadData(MAG_RawData_t *data)
 {
-  if (id == NULL)
+  if (data == NULL)
   {
     return false;
   }
 
-  return (HAL_I2C_Mem_Read(&hi2c1,
+  data->valid = false;
+  data->timestamp_ms = HAL_GetTick();
+
+  if (mag_hi2c == NULL)
+  {
+    return false;
+  }
+
+  if (!MAG_ReadRaw(&data->raw_x, &data->raw_y, &data->raw_z))
+  {
+    return false;
+  }
+
+  data->timestamp_ms = HAL_GetTick();
+  data->valid = true;
+  return true;
+}
+
+static bool MAG_ReadProductID(uint8_t *id)
+{
+  if ((mag_hi2c == NULL) || (id == NULL))
+  {
+    return false;
+  }
+
+  return (HAL_I2C_Mem_Read(mag_hi2c,
                            MMC5983MA_I2C_ADDR,
                            MMC5983MA_PRODUCT_ID_REG,
                            I2C_MEMADD_SIZE_8BIT,
@@ -50,19 +87,19 @@ bool MAG_ReadProductID(uint8_t *id)
                            MAG_I2C_TIMEOUT_MS) == HAL_OK);
 }
 
-bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz)
+static bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz)
 {
   uint8_t control_value = MMC5983MA_CONTROL_0_TM_M;
   uint8_t status = 0U;
   uint8_t raw[MAG_RAW_DATA_SIZE] = {0};
   uint32_t start_tick;
 
-  if ((mx == NULL) || (my == NULL) || (mz == NULL))
+  if ((mag_hi2c == NULL) || (mx == NULL) || (my == NULL) || (mz == NULL))
   {
     return false;
   }
 
-  if (HAL_I2C_Mem_Write(&hi2c1,
+  if (HAL_I2C_Mem_Write(mag_hi2c,
                         MMC5983MA_I2C_ADDR,
                         MMC5983MA_CONTROL_0_REG,
                         I2C_MEMADD_SIZE_8BIT,
@@ -76,7 +113,7 @@ bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz)
   start_tick = HAL_GetTick();
   do
   {
-    if (HAL_I2C_Mem_Read(&hi2c1,
+    if (HAL_I2C_Mem_Read(mag_hi2c,
                          MMC5983MA_I2C_ADDR,
                          MMC5983MA_STATUS_REG,
                          I2C_MEMADD_SIZE_8BIT,
@@ -100,7 +137,7 @@ bool MAG_ReadRaw(int32_t *mx, int32_t *my, int32_t *mz)
     return false;
   }
 
-  if (HAL_I2C_Mem_Read(&hi2c1,
+  if (HAL_I2C_Mem_Read(mag_hi2c,
                        MMC5983MA_I2C_ADDR,
                        MMC5983MA_XOUT0_REG,
                        I2C_MEMADD_SIZE_8BIT,
