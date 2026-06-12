@@ -1060,8 +1060,11 @@ void EKF_LoadCalibrationFromFlash(void)
             EKF_gyro_bias[1]   = sys_flags.calib.gyro_bias[1];
             EKF_gyro_bias[2]   = sys_flags.calib.gyro_bias[2];
 
-            // 還原地磁計硬鐵偏移
-            MMC5983_SetOffsets(sys_flags.mag_offsets);
+            // 還原地磁計硬鐵偏移（經對齊區域陣列中轉，避免取 packed 成員位址）
+            float mag_off[3] = { sys_flags.mag_offsets[0],
+                                 sys_flags.mag_offsets[1],
+                                 sys_flags.mag_offsets[2] };
+            MMC5983_SetOffsets(mag_off);
 
             EKF_calibrated = 1; // Mark calibration as complete
 
@@ -1168,7 +1171,8 @@ void EKF_SaveMagCalibration(float cx, float cy, float cz) {
     // 3. 寫入 Flash Sector 0
     if (Flash_WriteSysFlags(&sys_flags) == W25QXX_OK) {
         // 套用到感測器
-        MMC5983_SetOffsets(sys_flags.mag_offsets);
+        float mag_off[3] = { cx, cy, cz };
+        MMC5983_SetOffsets(mag_off);
         printf("[CAL] Mag hard-iron offset saved to Flash: %.1f, %.1f, %.1f\r\n", cx, cy, cz);
     } else {
         printf("[CAL] ERROR: Failed to save mag offsets to Flash!\r\n");
