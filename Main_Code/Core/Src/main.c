@@ -351,14 +351,23 @@ int main(void)
   printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
 
   /* E80-900M2213S 920MHz LoRa 啟動（SX126x/LLCC68, SPI3，與 Flash 共用匯流排）。
-   * 讀回 sync word 驗活；失敗僅記錄旗標，不阻擋系統啟動。 */
+   * 故障隔離：E80 與 W25Q128 Flash 共用 SPI3 的 SCK/MISO/MOSI，故障的 E80 可能
+   * 持續驅動 MISO 而污染 Flash 讀寫（飛行資料記錄）。因此無論主動停用或偵測失敗，
+   * 一律呼叫 LoRaE80_Shutdown() 把模組按在 reset（RST 低→全腳高阻）自匯流排斷開。 */
+#if LORA920_ENABLE
   if (LoRaE80_Init(&hspi3) == HAL_OK) {
       lora920_ok = 1;
       printf("[LORA920] E80 online (SX126x SPI3).\r\n");
   } else {
       lora920_ok = 0;
-      printf("[LORA920] E80 NOT detected (SPI3) - check TCXO/DIO2 config in lora_e80.c.\r\n");
+      LoRaE80_Shutdown();   /* 偵測失敗（含 MISO 接地/浮空）→ RST 拉低隔離，釋放 SPI3 */
+      printf("[LORA920] E80 NOT detected — held in reset to free SPI3 (protect Flash).\r\n");
   }
+#else
+  lora920_ok = 0;
+  LoRaE80_Shutdown();       /* 主動停用：RST 拉低使 E80 不驅動共用 SPI3 MISO */
+  printf("[LORA920] disabled (LORA920_ENABLE=0) — held in reset, SPI3 freed for Flash.\r\n");
+#endif
 
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
   Flash_Test();

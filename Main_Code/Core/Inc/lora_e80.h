@@ -22,13 +22,37 @@ extern "C" {
 
 #include "stm32f4xx_hal.h"
 
+/* ============================================================
+ *  模組啟用開關
+ * ============================================================
+ * LORA920_ENABLE = 0：開機不初始化 E80，改呼叫 LoRaE80_Shutdown() 把模組
+ *   按在 reset（RST 拉低、CS 拉高）—— SX126x 於 NRST 拉低時所有腳位呈高阻，
+ *   E80 因此「物理斷開」於 SPI3 共用的 SCK/MISO/MOSI，不會污染與其同匯流排
+ *   的 W25Q128 Flash 讀寫（飛行資料記錄優先）。
+ *   ★ E80 920MHz 鏈路目前停用（bring-up 問題待解）。硬體修好後改回 1 即恢復。
+ * LORA920_ENABLE = 1：正常初始化；若偵測失敗（含 MISO 接地/浮空）亦會自動
+ *   走 Shutdown 隔離，故障的 E80 絕不被放任掛在 SPI3 上。 */
+#ifndef LORA920_ENABLE
+#define LORA920_ENABLE 0
+#endif
+
 /**
  * @brief 初始化 E80（重置 → standby → LoRa 參數 → DIO IRQ），並讀回 sync word 驗活。
  * @param hspi E80 所掛之 SPI（本專案為 &hspi3）。
- * @return HAL_OK 晶片在線且設定完成；HAL_ERROR/HAL_TIMEOUT 未偵測到模組。
+ * @return HAL_OK 晶片在線且設定完成；HAL_ERROR/HAL_TIMEOUT 未偵測到模組
+ *         （含早期 MISO 健康檢查失敗：GetStatus=0x00 接地 / 0xFF 浮空）。
  * @note  於 main() 初始化區（scheduler 啟動前）呼叫一次。
  */
 HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi);
+
+/**
+ * @brief 安全停用 E80 並從 SPI3 匯流排隔離：CS 拉高 + RST 拉低並保持。
+ *        SX126x NRST 拉低時全腳高阻 → E80 不再驅動共用 MISO，保護同匯流排
+ *        的 W25Q128 Flash。停用後 LoRaE80_Send/IsReady 一律不觸碰 SPI3。
+ *        僅操作 GPIO（不碰 SPI/mutex），可於 scheduler 啟動前安全呼叫。
+ *        用於：①LORA920_ENABLE=0 主動停用；②Init 偵測失敗的故障隔離。
+ */
+void LoRaE80_Shutdown(void);
 
 /**
  * @brief 非阻塞發送一筆 LoRa 封包。

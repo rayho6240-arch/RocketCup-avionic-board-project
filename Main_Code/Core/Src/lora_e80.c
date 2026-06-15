@@ -65,6 +65,7 @@ static volatile uint8_t   s_tx_done = 0;
 static uint8_t            s_tx_in_progress = 0;
 static uint32_t           s_tx_start_tick = 0;
 static uint8_t            s_inited = 0;
+static uint8_t            s_disabled = 0;   /* 1 = 已 Shutdown 隔離：拒絕一切 SPI3 觸碰 */
 /* 初始化診斷：存起來供週期性遙測輸出（開機太早、序列埠來不及接） */
 static int     s_init_rd_st      = -1;
 static uint8_t s_init_busy       = 0xFF;
@@ -177,6 +178,7 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     s_tx_done        = 0;
     s_tx_in_progress = 0;
     s_inited         = 0;
+    s_disabled       = 0;   /* 重新嘗試啟用：解除先前的隔離標記 */
 
     E80_CS_HIGH();
     e80_reset();
@@ -196,6 +198,14 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
         E80_CS_HIGH();
         SPI3_Bus_Unlock();
         s_get_status_byte = gs_rx[1];  /* 0x22=STBY_RC 正常; 0x00=MISO接地; 0xFF=浮空 */
+    }
+
+    /* 早期 MISO 匯流排健康檢查：0x00=MISO 被拉接地、0xFF=MISO 浮空，兩者皆表示
+     * E80 未正常驅動共用匯流排（晶片未上電/焊接不良/故障）。此時不再送後續設定
+     * 命令（避免在壞匯流排上瞎跑、且每筆都觸碰 SPI3），直接回報失敗 —— 由 main
+     * 接住後呼叫 LoRaE80_Shutdown() 把模組按在 reset，保護同匯流排的 Flash。 */
+    if (s_get_status_byte == 0x00 || s_get_status_byte == 0xFF) {
+        return HAL_ERROR;
     }
 
     /* Standby (RC) */
@@ -279,9 +289,23 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     return HAL_OK;
 }
 
+void LoRaE80_Shutdown(void)
+{
+    /* 先釋放 CS，再把 RST 拉低並保持：SX126x NRST=低 → 全腳高阻，E80 自 SPI3
+     * 共用線（SCK/MISO/MOSI）斷開，不再有機會驅動/污染 Flash 的讀寫交易。
+     * 純 GPIO 操作（不碰 SPI/mutex），scheduler 啟動前亦可安全呼叫。 */
+    E80_CS_HIGH();
+    HAL_GPIO_WritePin(LORA920_RST_GPIO_Port, LORA920_RST_Pin, GPIO_PIN_RESET);
+
+    s_inited         = 0;
+    s_disabled       = 1;
+    s_tx_in_progress = 0;
+    s_tx_done        = 0;
+}
+
 uint8_t LoRaE80_IsReady(void)
 {
-    if (!s_inited) return 0U;
+    if (s_disabled || !s_inited) return 0U;   /* 已隔離或未初始化 → 不觸碰 SPI3 */
     if (s_tx_in_progress) return 0U;
     return (e80_wait_busy(E80_BUSY_TIMEOUT_MS) == HAL_OK) ? 1U : 0U;
 }
@@ -290,8 +314,8 @@ HAL_StatusTypeDef LoRaE80_Send(const uint8_t *data, uint8_t len)
 {
     uint8_t clr[2] = { 0xFF, 0xFF };
 
-    if (!s_inited || s_hspi == NULL || data == NULL || len == 0) {
-        return HAL_ERROR;
+    if (s_disabled || !s_inited || s_hspi == NULL || data == NULL || len == 0) {
+        return HAL_ERROR;   /* 已隔離（含 LORA920_ENABLE=0）→ 絕不觸碰 SPI3 */
     }
 
     /* 背壓：上一筆 TX 是否完成？ */
