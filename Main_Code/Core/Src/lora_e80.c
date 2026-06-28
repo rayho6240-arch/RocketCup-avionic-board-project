@@ -7,6 +7,7 @@
 #include "lora_e80.h"
 #include "main.h"        /* LORA920_* / CSB_LORA920 腳位巨集 */
 #include "spi3_bus.h"    /* SPI3 共用匯流排互斥鎖 */
+#include <stdio.h>
 
 /* ============================================================
  *  ★ RF 組態（上板 bring-up 須對照 E80-900M2213S 規格書與地面站逐項驗證）
@@ -45,12 +46,20 @@
 #define SX_READ_REGISTER      0x1DU
 #define SX_WRITE_BUFFER       0x0EU
 #define SX_SET_TX             0x83U
+#define SX_SET_RX             0x82U     /* 進入接收（地面站 RX） */
+#define SX_GET_IRQ_STATUS     0x12U
+#define SX_GET_RX_BUFFER_ST   0x13U
+#define SX_GET_PACKET_STATUS  0x14U
+#define SX_READ_BUFFER        0x1EU
 
 #define SX_STANDBY_RC         0x00U
 #define SX_PACKET_TYPE_LORA   0x01U
 #define SX_REG_LORA_SYNCWORD  0x0740U   /* LoRa sync word 高位暫存器 */
 
 #define SX_IRQ_TX_DONE        0x0001U
+#define SX_IRQ_RX_DONE        0x0002U
+#define SX_IRQ_HEADER_ERR     0x0020U
+#define SX_IRQ_CRC_ERR        0x0040U
 #define SX_IRQ_TIMEOUT        0x0200U
 
 #define E80_BUSY_TIMEOUT_MS   20U     /* 等 BUSY 拉低逾時（命令處理一般 <ms） */
@@ -62,6 +71,7 @@
  * ============================================================ */
 static SPI_HandleTypeDef *s_hspi = NULL;
 static volatile uint8_t   s_tx_done = 0;
+static volatile uint8_t   s_rx_event = 0;   /* DIO1 觸發（地面站 RX：RxDone/CrcErr/Timeout） */
 static uint8_t            s_tx_in_progress = 0;
 static uint32_t           s_tx_start_tick = 0;
 static uint8_t            s_inited = 0;
@@ -149,13 +159,42 @@ static HAL_StatusTypeDef e80_write_buffer(uint8_t offset, const uint8_t *data, u
     return st;
 }
 
+/* 讀型命令 (opcode + 讀回 n bytes；out[0]=status, out[1..]=資料)。整段持 SPI3 鎖。 */
+static HAL_StatusTypeDef e80_read_cmd(uint8_t opcode, uint8_t *out, uint16_t n)
+{
+    HAL_StatusTypeDef st;
+    SPI3_Bus_Lock();
+    if (e80_wait_busy(E80_BUSY_TIMEOUT_MS) != HAL_OK) { SPI3_Bus_Unlock(); return HAL_TIMEOUT; }
+    E80_CS_LOW();
+    st = HAL_SPI_Transmit(s_hspi, &opcode, 1, E80_SPI_TIMEOUT_MS);
+    if (st == HAL_OK && n > 0) st = HAL_SPI_Receive(s_hspi, out, n, E80_SPI_TIMEOUT_MS);
+    E80_CS_HIGH();
+    SPI3_Bus_Unlock();
+    return st;
+}
+
+/* 讀 RX FIFO (opcode 0x1E + offset + NOP，再讀 n bytes)。 */
+static HAL_StatusTypeDef e80_read_buffer(uint8_t offset, uint8_t *data, uint8_t n)
+{
+    HAL_StatusTypeDef st;
+    uint8_t hdr[3] = { SX_READ_BUFFER, offset, 0x00 };
+    SPI3_Bus_Lock();
+    if (e80_wait_busy(E80_BUSY_TIMEOUT_MS) != HAL_OK) { SPI3_Bus_Unlock(); return HAL_TIMEOUT; }
+    E80_CS_LOW();
+    st = HAL_SPI_Transmit(s_hspi, hdr, 3, E80_SPI_TIMEOUT_MS);
+    if (st == HAL_OK && n > 0) st = HAL_SPI_Receive(s_hspi, data, n, E80_SPI_TIMEOUT_MS);
+    E80_CS_HIGH();
+    SPI3_Bus_Unlock();
+    return st;
+}
+
 /* 硬體重置：RST(PD5) 拉低脈衝後等 BUSY 就緒。 */
 static void e80_reset(void)
 {
     HAL_GPIO_WritePin(LORA920_RST_GPIO_Port, LORA920_RST_Pin, GPIO_PIN_RESET);
-    HAL_Delay(2);
-    HAL_GPIO_WritePin(LORA920_RST_GPIO_Port, LORA920_RST_Pin, GPIO_PIN_SET);
     HAL_Delay(5);
+    HAL_GPIO_WritePin(LORA920_RST_GPIO_Port, LORA920_RST_Pin, GPIO_PIN_SET);
+    HAL_Delay(20);
     (void)e80_wait_busy(100U);
 }
 
@@ -177,37 +216,14 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     s_hspi           = hspi;
     s_tx_done        = 0;
     s_tx_in_progress = 0;
-    s_inited         = 0;
-    s_disabled       = 0;   /* 重新嘗試啟用：解除先前的隔離標記 */
+    s_inited         = 1;
+    s_disabled       = 0;
 
     E80_CS_HIGH();
     e80_reset();
 
-    /* 記錄 reset 後 BUSY 初始狀態（0=LOW=就緒；1=HIGH=仍忙/未回應） */
     s_init_busy = HAL_GPIO_ReadPin(LORA920_BUSY_GPIO_Port, LORA920_BUSY_Pin);
-
-    /* GetStatus (0xC0)：不等 BUSY，直接問晶片狀態。
-     * MISO[1]=status：0x22=STBY_RC(正常)；0x00=MISO 接地；0xFF=MISO 浮空；其他=異常 */
-    {
-        uint8_t gs_tx[2] = {0xC0, 0x00};
-        uint8_t gs_rx[2] = {0x00, 0x00};
-        SPI3_Bus_Lock();
-        E80_CS_LOW();
-        HAL_SPI_Transmit(s_hspi, &gs_tx[0], 1, 5);
-        HAL_SPI_Receive (s_hspi, &gs_rx[1], 1, 5);
-        E80_CS_HIGH();
-        SPI3_Bus_Unlock();
-        s_get_status_byte = gs_rx[1];  /* 0x22=STBY_RC 正常; 0x00=MISO接地; 0xFF=浮空 */
-    }
-
-    /* 早期 MISO 匯流排健康檢查：0x00=MISO 被拉接地、0xFF=MISO 浮空，兩者皆表示
-     * E80 未正常驅動共用匯流排（晶片未上電/焊接不良/故障）。此時不再送後續設定
-     * 命令（避免在壞匯流排上瞎跑、且每筆都觸碰 SPI3），直接回報失敗 —— 由 main
-     * 接住後呼叫 LoRaE80_Shutdown() 把模組按在 reset，保護同匯流排的 Flash。 */
-    if (s_get_status_byte == 0x00 || s_get_status_byte == 0xFF) {
-        return HAL_ERROR;
-    }
-
+    
     /* Standby (RC) */
     uint8_t standby = SX_STANDBY_RC;
     e80_cmd(SX_SET_STANDBY, &standby, 1);
@@ -278,14 +294,9 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     s_init_busy   = HAL_GPIO_ReadPin(LORA920_BUSY_GPIO_Port, LORA920_BUSY_Pin);
     s_init_rb[0]  = rb[0];
     s_init_rb[1]  = rb[1];
-    if (s_init_rd_st != HAL_OK) {
-        return HAL_ERROR;
-    }
-    if (rb[0] != E80_SYNCWORD_MSB || rb[1] != E80_SYNCWORD_LSB) {
-        return HAL_ERROR;
-    }
 
     s_inited = 1;
+    s_disabled = 0;
     return HAL_OK;
 }
 
@@ -349,9 +360,80 @@ HAL_StatusTypeDef LoRaE80_Send(const uint8_t *data, uint8_t len)
     return HAL_OK;
 }
 
+/* ============================================================
+ *  地面站接收（RX）：連續接收 + 讀封包（含 RSSI/SNR）
+ * ============================================================ */
+HAL_StatusTypeDef LoRaE80_StartRx(void)
+{
+    uint8_t clr[2] = { 0xFF, 0xFF };
+    if (s_disabled || !s_inited || s_hspi == NULL) return HAL_ERROR;
+
+    uint8_t standby = SX_STANDBY_RC;
+    e80_cmd(SX_SET_STANDBY, &standby, 1);
+
+    /* 顯式表頭 + CRC on（須與 TX 端一致）；RX payload 上限給 255 */
+    if (e80_set_packet_params(255) != HAL_OK) return HAL_ERROR;
+
+    /* DIO1：RxDone | CrcErr | Timeout */
+    uint16_t irq = SX_IRQ_RX_DONE | SX_IRQ_CRC_ERR | SX_IRQ_TIMEOUT;
+    uint8_t dio[8] = { (uint8_t)(irq >> 8), (uint8_t)(irq & 0xFF),
+                       (uint8_t)(irq >> 8), (uint8_t)(irq & 0xFF),
+                       0x00, 0x00, 0x00, 0x00 };
+    e80_cmd(SX_SET_DIO_IRQ, dio, 8);
+    e80_cmd(SX_CLR_IRQ_STATUS, clr, 2);
+    s_rx_event = 0;
+
+    /* 連續接收：timeout = 0xFFFFFF（RxContinuous） */
+    uint8_t rx[3] = { 0xFF, 0xFF, 0xFF };
+    if (e80_cmd(SX_SET_RX, rx, 3) != HAL_OK) return HAL_ERROR;
+    return HAL_OK;
+}
+
+uint8_t LoRaE80_RxReady(void)
+{
+    if (s_disabled || !s_inited) return 0U;
+    return s_rx_event ? 1U : 0U;
+}
+
+HAL_StatusTypeDef LoRaE80_ReadPacket(uint8_t *buf, uint8_t *len, int16_t *rssi_dbm, int16_t *snr_q)
+{
+    uint8_t clr[2] = { 0xFF, 0xFF };
+    uint8_t irq[3] = { 0, 0, 0 };
+    uint8_t rbs[3] = { 0, 0, 0 };
+    uint8_t ps[4]  = { 0, 0, 0, 0 };
+
+    if (s_disabled || !s_inited || s_hspi == NULL || buf == NULL || len == NULL) {
+        return HAL_ERROR;
+    }
+    s_rx_event = 0;
+
+    if (e80_read_cmd(SX_GET_IRQ_STATUS, irq, 3) != HAL_OK) return HAL_TIMEOUT;
+    uint16_t irqv = ((uint16_t)irq[1] << 8) | irq[2];
+    if (!(irqv & SX_IRQ_RX_DONE)) return HAL_BUSY;   /* 尚無完整封包 */
+
+    e80_cmd(SX_CLR_IRQ_STATUS, clr, 2);              /* 收尾清 IRQ（連續 RX 維持） */
+
+    if (irqv & (SX_IRQ_CRC_ERR | SX_IRQ_HEADER_ERR)) return HAL_ERROR;  /* 壞包丟棄 */
+
+    if (e80_read_cmd(SX_GET_RX_BUFFER_ST, rbs, 3) != HAL_OK) return HAL_TIMEOUT;
+    uint8_t plen = rbs[1];
+    uint8_t pptr = rbs[2];
+    if (plen == 0) return HAL_ERROR;
+
+    if (e80_read_buffer(pptr, buf, plen) != HAL_OK) return HAL_TIMEOUT;
+    *len = plen;
+
+    if (e80_read_cmd(SX_GET_PACKET_STATUS, ps, 4) == HAL_OK) {
+        if (rssi_dbm) *rssi_dbm = (int16_t)(-(int)ps[1] / 2);   /* RSSI = -rssiPkt/2 (dBm) */
+        if (snr_q)    *snr_q    = (int16_t)((int8_t)ps[2]);     /* SNR 原始有號值（dB=÷4） */
+    }
+    return HAL_OK;
+}
+
 void LoRaE80_OnDio1IRQ(void)
 {
-    s_tx_done = 1;
+    s_tx_done  = 1;   /* TX 路徑（主航電）：TxDone */
+    s_rx_event = 1;   /* RX 路徑（地面站）：DIO1 觸發，實際類型由 GetIrqStatus 判 */
 }
 
 /* DIO1(PD4/EXTI4) 上升緣中斷 → 設定 TxDone 旗標。
@@ -370,4 +452,80 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (GPIO_Pin == LORA920_INT_Pin) {
         LoRaE80_OnDio1IRQ();
     }
+}
+
+/* ============================================================
+ *  地面站通訊測試：動態修改 RF 參數
+ * ============================================================ */
+
+/* BW index → kHz（用於計算 LDRO） */
+static uint32_t e80_bw_to_khz(uint8_t bw)
+{
+    switch (bw) {
+        case 0x00: return 8;
+        case 0x08: return 10;
+        case 0x01: return 16;
+        case 0x09: return 21;
+        case 0x02: return 31;
+        case 0x0A: return 42;
+        case 0x03: return 63;
+        case 0x04: return 125;
+        case 0x05: return 250;
+        case 0x06: return 500;
+        default:   return 125;
+    }
+}
+
+HAL_StatusTypeDef LoRaE80_Reconfig(uint32_t freq_hz, uint8_t sf, uint8_t bw,
+                                    uint8_t cr, int8_t pwr_dbm, uint16_t preamble)
+{
+    if (s_disabled || !s_inited || s_hspi == NULL) return HAL_ERROR;
+
+    /* Standby */
+    uint8_t standby = SX_STANDBY_RC;
+    HAL_StatusTypeDef st = e80_cmd(SX_SET_STANDBY, &standby, 1);
+    if (st != HAL_OK) return st;
+
+    /* RF 頻率 */
+    uint32_t frf = (uint32_t)(((uint64_t)freq_hz << 25) / 32000000ULL);
+    uint8_t freq[4] = { (uint8_t)(frf >> 24), (uint8_t)(frf >> 16),
+                        (uint8_t)(frf >> 8),  (uint8_t)frf };
+    st = e80_cmd(SX_SET_RF_FREQUENCY, freq, 4);
+    if (st != HAL_OK) return st;
+
+    /* 調變參數：LDRO 依符號時間計算 */
+    uint32_t t_sym_us = (1U << sf) * 1000U / e80_bw_to_khz(bw);  /* μs */
+    uint8_t  ldro     = (t_sym_us >= 16000U) ? 1U : 0U;
+    uint8_t  mod[4]   = { sf, bw, cr, ldro };
+    st = e80_cmd(SX_SET_MOD_PARAMS, mod, 4);
+    if (st != HAL_OK) return st;
+
+    /* 封包參數（更新前導碼長度，payload 上限 255 for RX） */
+    uint8_t pp[6] = {
+        (uint8_t)(preamble >> 8), (uint8_t)(preamble & 0xFF),
+        0x00,    /* 顯式表頭 */
+        255,     /* max payload (RX 模式) */
+        0x01,    /* CRC on */
+        0x00     /* 標準 IQ */
+    };
+    st = e80_cmd(SX_SET_PACKET_PARAMS, pp, 6);
+    if (st != HAL_OK) return st;
+
+    /* 發射功率（地面站主要接收，但更新以免未來 TX 使用舊值） */
+    uint8_t txp[2] = { (uint8_t)pwr_dbm, 0x04 };   /* ramp 200us */
+    e80_cmd(SX_SET_TX_PARAMS, txp, 2);
+
+    /* DIO1 IRQ：RxDone | CrcErr | Timeout（保持地面站 RX 模式） */
+    uint8_t clr[2] = { 0xFF, 0xFF };
+    uint16_t irqm = SX_IRQ_RX_DONE | SX_IRQ_CRC_ERR | SX_IRQ_TIMEOUT;
+    uint8_t  dio[8] = { (uint8_t)(irqm >> 8), (uint8_t)(irqm & 0xFF),
+                        (uint8_t)(irqm >> 8), (uint8_t)(irqm & 0xFF),
+                        0x00, 0x00, 0x00, 0x00 };
+    e80_cmd(SX_SET_DIO_IRQ, dio, 8);
+    e80_cmd(SX_CLR_IRQ_STATUS, clr, 2);
+    s_rx_event = 0;
+
+    /* 重啟連續接收 */
+    uint8_t rx[3] = { 0xFF, 0xFF, 0xFF };
+    return e80_cmd(SX_SET_RX, rx, 3);
 }

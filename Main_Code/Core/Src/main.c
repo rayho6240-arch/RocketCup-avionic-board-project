@@ -37,6 +37,11 @@
 #include "lora_e22.h"      /* E22-400T30S 433MHz LoRa 透傳 (UART3) */
 #include "lora_e80.h"      /* E80-900M2213S 920MHz LoRa (SX126x SPI3) */
 #include "spi3_bus.h"      /* SPI3 共用匯流排互斥鎖 (Flash + E80) */
+#include "board_config.h"  /* 主/備角色與功能旗標（單一程式碼雙板） */
+#include "link_hw.h"       /* 板間鏈路（USART2 全雙工）；FEATURE_LINK 下編入 */
+#include "ground_station.h" /* 地面站主流程（IS_GROUND 下編入；其餘角色為空） */
+#include "gs_lora_test.h"   /* 地面站 LoRa 通訊測試模組（UART2 命令 + 雙鏈路統計） */
+#include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -215,7 +220,9 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_TIM7_Init(void);
+#if !FEATURE_USB_CDC
 static void MX_USB_OTG_FS_PCD_Init(void);
+#endif
 static void MX_CRC_Init(void);
 static void MX_RNG_Init(void);
 void StartDefaultTask(void *argument);
@@ -279,11 +286,17 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM6_Init();
   MX_TIM7_Init();
-  MX_USB_OTG_FS_PCD_Init();
+#if !FEATURE_USB_CDC
+  MX_USB_OTG_FS_PCD_Init();   /* 飛行版：低階 PCD；地面站改由 USB-CDC 的 usbd_conf 帶起 */
+#endif
   MX_CRC_Init();
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+#if FEATURE_USB_CDC
+  MX_USB_DEVICE_Init();   /* 地面站：USB 虛擬序列埠 (CDC)。飛行版不啟用（不列舉、不佔 CPU）。 */
+#endif
+#if FEATURE_FLIGHT   /* 主/備：飛控感測器 (IMU/高G/氣壓)；地面站 (ROLE_GROUND) 不啟用以省資源 */
   if (BMI088_Init(&hspi2) == HAL_OK) {
       bmi088_ok = 1;
       HAL_TIM_Base_Start_IT(&htim6);                           // 啟動 TIM6 1.6 kHz 中斷採樣 (Accel)
@@ -319,15 +332,23 @@ int main(void)
                  (int)(fabsf(t0_avg - (int)t0_avg) * 100.0f));
       }
   }
+#else
+  bmi088_ok = 0;
+  adxl375_ok = 0;
+  bmp388_ok = 0;   /* 地面站：不啟用 IMU/高G/氣壓感測器 */
+#endif /* FEATURE_FLIGHT */
 
   /* GPS 驅動啟動 (USART6, NMEA-0183, 循環 DMA + IDLE 接收)。
    * NEO-M9N 實體掛載於 USART6（PC6/PC7）；解析於 task context（主迴圈 GPS_Update()）進行，
    * ISR/DMA 事件回呼僅組句設旗標。 */
+#if FEATURE_GPS
   GPS_Init(&huart6);
+#endif
 
   /* MMC5983MA 三軸地磁計啟動 (I2C1, SCL=PB7/SDA=PB8, 位址 0x30)。
    * 初始化含 Product ID 驗證、軟體重置、400Hz 頻寬與一次 SET/RESET 橋偏校準。
    * 失敗（晶片未上線）僅記錄旗標，不阻擋系統啟動。 */
+#if FEATURE_MAG
   if (MMC5983_Init() == HAL_OK) {
       mag_ok = 1;
       printf("[MAG] MMC5983MA online. offset[X,Y,Z]=%ld,%ld,%ld\r\n",
@@ -338,28 +359,66 @@ int main(void)
       mag_ok = 0;
       printf("[MAG] MMC5983MA NOT detected (I2C1).\r\n");
   }
+#else
+  mag_ok = 0;   /* 備板：磁力計 (I2C1) 關閉 */
+#endif
 
+#if FEATURE_LORA
   /* E22-400T30S 433MHz LoRa 啟動（UART3 透傳模式 M0=M1=0）。
-   * 重置 + 等 AUX 拉高；未接模組也不阻擋啟動（發送由 AUX 背壓守護）。 */
-  /* P1：AUX 逾時不再視為成功 —— lora433_ok=0 時遙測任務每 10s 重試 init */
-  if (LoRaE22_Init(&huart3) == HAL_OK) {
-      lora433_ok = 1;
+   * 重置 + 等 AUX 拉高；未接模組也不阻擋啟動（發送由 AUX 背壓守護）。
+   * 地面站固定啟用（收 433 下行）；主航電由 LORA433_ENABLE 決定是否啟用 433。 */
+#if IS_GROUND || LORA433_ENABLE
+  lora433_ok = 0;
+  for (int retry = 0; retry < 3; retry++) {
+      HAL_IWDG_Refresh(&hiwdg);
+      if (LoRaE22_Init(&huart3) == HAL_OK) {
+          lora433_ok = 1;
+          break;
+      }
+      HAL_Delay(50);
+  }
+  if (lora433_ok) {
+      printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
   } else {
-      lora433_ok = 0;
       printf("[LORA] E22 433MHz AUX 逾時（模組未回應），遙測任務將週期性重試。\r\n");
   }
-  printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
+#else
+  lora433_ok = 0;
+  printf("[LORA433] disabled (LORA433_ENABLE=0) — 433 下行停用，UART3 不發送。\r\n");
+#endif
 
-  /* E80-900M2213S 920MHz LoRa 啟動（SX126x/LLCC68, SPI3，與 Flash 共用匯流排）。
-   * 故障隔離：E80 與 W25Q128 Flash 共用 SPI3 的 SCK/MISO/MOSI，故障的 E80 可能
-   * 持續驅動 MISO 而污染 Flash 讀寫（飛行資料記錄）。因此無論主動停用或偵測失敗，
-   * 一律呼叫 LoRaE80_Shutdown() 把模組按在 reset（RST 低→全腳高阻）自匯流排斷開。 */
-#if LORA920_ENABLE
-  if (LoRaE80_Init(&hspi3) == HAL_OK) {
-      lora920_ok = 1;
+  HAL_IWDG_Refresh(&hiwdg);
+
+  /* E80-900M2213S 920MHz LoRa 啟動（SX126x/LLCC68, SPI3，與 Flash 共用匯流排）。 */
+#if IS_GROUND
+  lora920_ok = 0;
+  for (int retry = 0; retry < 3; retry++) {
+      HAL_IWDG_Refresh(&hiwdg);
+      if (LoRaE80_Init(&hspi3) == HAL_OK && LoRaE80_StartRx() == HAL_OK) {
+          lora920_ok = 1;
+          break;
+      }
+      HAL_Delay(50);
+  }
+  if (lora920_ok) {
+      printf("[LORA920] E80 RX online (SX126x SPI3, continuous RX).\r\n");
+  } else {
+      LoRaE80_Shutdown();
+      printf("[LORA920] E80 RX init failed — held in reset (SPI3 freed for Flash).\r\n");
+  }
+#elif LORA920_ENABLE
+  lora920_ok = 0;
+  for (int retry = 0; retry < 3; retry++) {
+      HAL_IWDG_Refresh(&hiwdg);
+      if (LoRaE80_Init(&hspi3) == HAL_OK) {
+          lora920_ok = 1;
+          break;
+      }
+      HAL_Delay(50);
+  }
+  if (lora920_ok) {
       printf("[LORA920] E80 online (SX126x SPI3).\r\n");
   } else {
-      lora920_ok = 0;
       LoRaE80_Shutdown();   /* 偵測失敗（含 MISO 接地/浮空）→ RST 拉低隔離，釋放 SPI3 */
       printf("[LORA920] E80 NOT detected — held in reset to free SPI3 (protect Flash).\r\n");
   }
@@ -368,12 +427,29 @@ int main(void)
   LoRaE80_Shutdown();       /* 主動停用：RST 拉低使 E80 不驅動共用 SPI3 MISO */
   printf("[LORA920] disabled (LORA920_ENABLE=0) — held in reset, SPI3 freed for Flash.\r\n");
 #endif
+#else  /* !FEATURE_LORA（備援航電）：不啟用任何 LoRa；仍按住 E80 RST 保護 SPI3 上的 Flash */
+  lora433_ok = 0;
+  lora920_ok = 0;
+  LoRaE80_Shutdown();       /* RST 拉低使 E80 不驅動共用 SPI3 MISO（飛行資料記錄保護） */
+#endif
+  /* E22(最壞 900ms) + E80(最壞 560ms) 合計可達 ~1.5s；補餵一次防 IWDG 2.05s 到期。
+   * Flash_Test() 含 sector erase(400ms) + write(500ms) 再補一次。 */
+  HAL_IWDG_Refresh(&hiwdg);
 
+#if FEATURE_FLASH
   /* W25Qxx SPI Flash 啟動自檢 (SPI3, CS=PA15) */
   Flash_Test();
+  HAL_IWDG_Refresh(&hiwdg);
+#endif
 
   /* Buzzer：啟動 TIM2 CH1 PWM，初始靜音 (CCR1=0) */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+
+#if FEATURE_LINK
+  /* 板間鏈路（USART2 全雙工）：重設 baud 為 LINK_BAUD 並啟動循環 DMA/IDLE 接收。
+   * 主備兩板程式相同，靠板間排線把 TX/RX 交叉對接。啟用後 USART2 不再作 printf 除錯橋。 */
+  Link_Init();
+#endif
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -400,7 +476,9 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+#if FEATURE_FLIGHT
   xEKFQueue = osMessageQueueNew(2, sizeof(EKF_Buffer_t*), NULL);
+#endif
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -409,7 +487,9 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+#if FEATURE_FLIGHT
   g_ekf_task_handle = osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
+#endif
 #ifdef ENABLE_DIAGNOSTICS
   static const osThreadAttr_t diagnosticTask_attributes = {
     .name = "diagTask",
@@ -418,14 +498,17 @@ int main(void)
   };
   osThreadNew(StartDiagnosticTask, NULL, &diagnosticTask_attributes);
 #endif
-  /* LoRa 下行遙測任務（低優先，不影響 1kHz 飛控迴圈時序）。
-   * 即使兩個 LoRa 模組都未初始化也建立——任務內自會跳過未就緒的鏈路。 */
+#if FEATURE_LORA_TX
+  /* LoRa 下行遙測任務（低優先，不影響 1kHz 飛控迴圈時序）。地面站 (FEATURE_LORA_TX=0) 只收不發。
+   * 即使兩個 LoRa 模組都未初始化也建立——任務內自會跳過未就緒的鏈路。
+   * 備援航電（FEATURE_LORA=0）不建立此任務：無 LoRa 下行，省去 E22 週期重試。 */
   static const osThreadAttr_t loraTelemTask_attributes = {
     .name = "loraTxTask",
     .stack_size = 512 * 4,
     .priority = (osPriority_t) osPriorityLow,
   };
   g_lora_task_handle = osThreadNew(LoRaTelemetry_Task, NULL, &loraTelemTask_attributes);
+#endif
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -1194,6 +1277,7 @@ static void MX_USART6_UART_Init(void)
   * @param None
   * @retval None
   */
+#if !FEATURE_USB_CDC   /* 地面站不需低階 PCD：USB-CDC 由 usbd_conf 的 USBD_LL_Init 帶起 */
 static void MX_USB_OTG_FS_PCD_Init(void)
 {
 
@@ -1223,6 +1307,7 @@ static void MX_USB_OTG_FS_PCD_Init(void)
   /* USER CODE END USB_OTG_FS_Init 2 */
 
 }
+#endif /* !FEATURE_USB_CDC */
 
 /**
   * Enable DMA controller clock
@@ -1353,7 +1438,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : LORA433_BUSY_Pin */
   GPIO_InitStruct.Pin = LORA433_BUSY_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(LORA433_BUSY_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : CSB_GYRO_Pin */
@@ -1452,7 +1537,16 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 int _write(int file, char *ptr, int len)
 {
+  (void)file;
+#if FEATURE_LINK
+  /* USART2 已作板間鏈路；printf 改走 SWO/ITM（需 SWD/SWV 觀看；無除錯器時 ITM_SendChar
+   * 自動略過、不阻塞）。如需回復 USART2 文字除錯橋，建置時設 -DFEATURE_LINK=0。 */
+  for (int i = 0; i < len; i++) {
+    ITM_SendChar((uint32_t)(uint8_t)ptr[i]);
+  }
+#else
   HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+#endif
   return len;
 }
 
@@ -1506,6 +1600,32 @@ static void FSM_Update(void)
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
     /* --- 1. 硬體動作（先於任何列印） --- */
+#if (IS_BACKUP && FEATURE_LINK)
+    /* 備援航電（不對稱冗餘）：自身 FSM 照常運算並推進狀態，但點火/部署輸出受閘控——
+     * 已收到主板開傘通知（鎖存）即抑制（共用點火頭，主板已點）；未收到則等
+     * BACKUP_GRACE_MS 後自行補點（主板漏點 / 失聯 / 死亡）。release/buzzer 照常輸出
+     * （自身未點火時 release 為無動作）。 */
+    {
+        static BackupGate_t s_drogue_gate, s_main_gate;
+        static uint8_t s_gate_init = 0U;
+        if (!s_gate_init) {
+            BackupGate_Init(&s_drogue_gate);
+            BackupGate_Init(&s_main_gate);
+            s_gate_init = 1U;
+        }
+        const LinkPeer_t *peer = Link_GetPeer();
+
+        if (BackupGate_Step(&s_drogue_gate, act.fire_drogue, peer->drogue_latched, now, BACKUP_GRACE_MS)) {
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 補點副傘引爆 MOSFET（主板未開傘）
+        }
+        if (act.release_drogue) {
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 自身點火限時導通保護：斷開
+        }
+        if (BackupGate_Step(&s_main_gate, act.deploy_main, peer->main_latched, now, BACKUP_GRACE_MS)) {
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 補部署主傘舵機（主板未部署）
+        }
+    }
+#else
     if (act.fire_drogue) {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 導通副傘引爆 MOSFET
     }
@@ -1515,6 +1635,7 @@ static void FSM_Update(void)
     if (act.deploy_main) {
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
     }
+#endif
     if (act.start_buzzer) {
         // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
         htim2.Instance->ARR  = 999;
@@ -1536,37 +1657,110 @@ static void FSM_Update(void)
     /* --- 3. 事件列印（訊息逐字保留自原 FSM_Update） --- */
     switch ((FSM_Event_t)act.event) {
         case FSM_EVT_LIFTOFF:
-            printf("[FSM] 🚀 LIFTOFF DETECTED! Transition to STATE_BOOST.\r\n");
+            printf("[FSM] [LIFTOFF] LIFTOFF DETECTED! Transition to STATE_BOOST.\r\n");
             break;
         case FSM_EVT_BURNOUT:
-            printf("[FSM] 🔥 MOTOR BURNOUT! Entering STATE_COAST.\r\n");
+            printf("[FSM] [BURNOUT] MOTOR BURNOUT! Entering STATE_COAST.\r\n");
             break;
         case FSM_EVT_APOGEE:
-            printf("[FSM] 🎪 DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
+            printf("[FSM] [APOGEE] DYNAMIC APOGEE DETECTED! Expected apogee in %.2f s (h_est: %.2f m). Deploying DROGUE.\r\n",
                    act.apogee_t_pred, in.h_est);
             break;
         case FSM_EVT_APOGEE_FAILSAFE:
             g_fsm_failsafe_fired = 1U;
-            printf("[FSM] ⏰ FAILSAFE APOGEE TIMEOUT (%lu ms)! Forcing DROGUE deployment (h_est: %.2f m, baro_rel: %.2f m).\r\n",
+            printf("[FSM] [FAILSAFE] FAILSAFE APOGEE TIMEOUT (%lu ms)! Forcing DROGUE deployment (h_est: %.2f m, baro_rel: %.2f m).\r\n",
                    (unsigned long)FSM_FAILSAFE_APOGEE_MS, in.h_est, in.baro_alt_rel);
             break;
         case FSM_EVT_DROGUE_DONE:
-            printf("[FSM] 🪂 Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
+            printf("[FSM] [DROGUE] Drogue deployed successfully. Entering STATE_DESCENT.\r\n");
             break;
         case FSM_EVT_MAIN_DEPLOY:
-            printf("[FSM] 🪁 DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n",
+            printf("[FSM] [MAIN] DYNAMIC LOW ALTITUDE REACHED! Trigger H: %.2f m (Target H: %.2f m, Fall V: %.2f m/s). Deploying MAIN.\r\n",
                    in.h_est, TARGET_MAIN_ALTITUDE, in.v_est);
             break;
         case FSM_EVT_MAIN_OPEN:
             printf("[FSM] Main deployed. Entering landing detection.\r\n");
             break;
         case FSM_EVT_TOUCHDOWN:
-            printf("[FSM] 🏁 TOUCHDOWN! 持續記錄中（降頻 10Hz）。按 USER_BT1 或逾時後自動關檔。\r\n");
+            printf("[FSM] [TOUCHDOWN] TOUCHDOWN! 持續記錄中（降頻 10Hz）。按 USER_BT1 或逾時後自動關檔。\r\n");
             break;
         default:
             break;
     }
 }
+
+#if FEATURE_LINK
+/* === 板間鏈路：自身狀態組裝 + 週期廣播 === */
+static void Link_BuildOwnStatus(LinkStatus_t *ls)
+{
+    EKF_State_t e = EKF_GetState();
+    ls->board_id  = IS_BACKUP ? LINK_BOARD_BACKUP : LINK_BOARD_PRIMARY;
+    ls->seq       = 0U;   /* 由 Link_SendStatus 補遞增序號 */
+    ls->fsm_state = (uint8_t)current_fsm_state;
+
+    /* flags 與下行遙測同語意（TELEM_FLAG_*）；備板據主板 DROGUE_FIRED/MAIN_DEPLOYED 抑制 */
+    uint8_t flags = 0U;
+    if (HAL_GPIO_ReadPin(FIRE_GPIO_Port, FIRE_Pin) == GPIO_PIN_SET)   flags |= TELEM_FLAG_DROGUE_FIRED;
+    if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000)         flags |= TELEM_FLAG_MAIN_DEPLOYED;
+    if (g_fsm_failsafe_fired)                                         flags |= TELEM_FLAG_FAILSAFE;
+    if (EKF_GetHealthBits() != 0U)                                    flags |= TELEM_FLAG_EKF_UNHEALTHY;
+    if (g_sensor_fault_bits != 0U)                                    flags |= TELEM_FLAG_SENSOR_FAULT;
+    ls->flags = flags;
+
+    ls->tick_ms     = HAL_GetTick();
+    ls->h_est_cm    = (int32_t)(e.pos_z * 100.0f);
+    ls->v_est_cms   = (int32_t)(e.vel_z * 100.0f);
+    ls->baro_alt_cm = (int32_t)(baro_data.altitude * 100.0f);
+    ls->a_z_cg      = (int16_t)(highg_data.az * 100.0f);
+}
+
+/* 飛控迴圈每 LINK_TX_PERIOD_MS 呼叫一次：廣播自身狀態給對端板。 */
+static void Link_PublishTick(void)
+{
+    LinkStatus_t ls;
+    Link_BuildOwnStatus(&ls);
+    Link_SendStatus(&ls);
+}
+#endif /* FEATURE_LINK */
+
+/* === HAL UART 回呼統一分派（單一定義；gps.c 已改為 GPS_Handle* 由此轉接） ===
+ * USART6 → GPS（FEATURE_GPS）；USART2 → 板間鏈路（FEATURE_LINK）。 */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+#if FEATURE_GPS
+    GPS_HandleRxEvent(huart, Size);
+#endif
+#if FEATURE_LINK
+    if (huart->Instance == USART2) Link_OnRxEvent(Size);
+#endif
+#if IS_GROUND
+    if (huart->Instance == USART3) GroundStation_OnUart3RxEvent(Size);  /* E22 433 透傳 RX */
+    if (huart->Instance == USART2) GsLoraTest_OnUart2RxEvent(Size);     /* 通訊測試命令介面 */
+#endif
+#if (!FEATURE_GPS && !FEATURE_LINK && !IS_GROUND)
+    (void)huart; (void)Size;
+#endif
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+#if FEATURE_GPS
+    GPS_HandleUartError(huart);
+#endif
+#if FEATURE_LINK
+    if (huart->Instance == USART2) Link_OnError();
+#endif
+#if (!FEATURE_GPS && !FEATURE_LINK)
+    (void)huart;
+#endif
+}
+
+#if FEATURE_LINK
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2) Link_OnTxComplete();
+}
+#endif
 
 uint16_t ADC_Read_Battery_mv(void) {
     uint32_t val = 0;
@@ -1612,11 +1806,15 @@ void LoRaTelemetry_Task(void *argument)
     osDelay(2000);
 
     uint32_t wake = osKernelGetTickCount();
+#if LORA433_ENABLE
     uint32_t e22_retry_tick = 0;
+#endif
     for (;;) {
         uint16_t len = Telemetry_Build(tx_buf);
 
-        /* P1：E22 初始化失敗時每 10s 重試一次（本任務最低優先，~305ms 阻塞無妨） */
+#if LORA433_ENABLE
+        /* P1：E22 初始化失敗時每 10s 重試一次（本任務最低優先，~305ms 阻塞無妨）。
+         * LORA433_ENABLE=0 時整段編譯移除——停用後不重試、不復活 E22。 */
         if (!lora433_ok && (HAL_GetTick() - e22_retry_tick) >= 10000U) {
             e22_retry_tick = HAL_GetTick();
             if (LoRaE22_Init(&huart3) == HAL_OK) {
@@ -1624,6 +1822,7 @@ void LoRaTelemetry_Task(void *argument)
                 printf("[LORA] E22 433MHz 重試成功，恢復下行。\r\n");
             }
         }
+#endif
 
         if (lora433_ok) {
             LoRaE22_Send(tx_buf, len);            /* 忙線(AUX low)回 HAL_BUSY，本次跳過 */
@@ -1648,7 +1847,9 @@ void StartDiagnosticTask(void *argument)
   uint32_t wake_tick = osKernelGetTickCount();
   for (;;)
   {
-      Poll_Serial_Commands();
+#if !FEATURE_LINK
+      Poll_Serial_Commands();   /* USART2 文字命令台；FEATURE_LINK 時 USART2 改作板間鏈路 */
+#endif
 
       if (tick % 50 == 0) {
           // 1. GPS 遙測
@@ -1810,6 +2011,9 @@ void Poll_Serial_Commands(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+#if IS_GROUND
+  GroundStation_Run();   /* 地面站主迴圈（接收 LoRa 433+920 + GPS → 對齊時間戳 → SD/Flash/USB），不返回 */
+#endif
   uint32_t tick = 0;
 
   /* === LED 開機自檢：全亮 2 秒確認三顆 LED 正常，之後全滅交由主迴圈接管 ===
@@ -1917,20 +2121,15 @@ void StartDefaultTask(void *argument)
   __HAL_TIM_ENABLE_IT(&htim6, TIM_IT_UPDATE);
   __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
 
-  /* === Flash Ring Buffer 初始化（SPI3，不影響 SPI1 感測器中斷） ===
-   * 掃描寫入頭 + 預擦 10 個 Sector（~10×200ms = 2s），期間由函式內部餵狗 */
+#if FEATURE_FLASH
+  /* === Flash Ring Buffer 初始化（SPI3，不影響 SPI1 感測器中斷） === */
   FlashRing_Init();
- 
-  /* === P0-F：空中熱啟動（Hot-Restart）安全恢復 ===
-   * 驗證鏈（FSM_HotStartDecide，host 已測）全過才恢復飛行狀態，任一失敗回
-   * STATE_PAD 完整重校準：封包 CRC、狀態 ∈ BOOST..DESCENT、tick<60s（防上次
-   * 飛行殘留資料）、|封包 baro − 當下 baro|<300m（高度連續性）。
-   * 重點火政策：封包 flags bit0（寫入當下 PD13 已導通）→ 恢復至 DESCENT 並
-   * 將 drogue_fired 鎖存入 FSM_Init —— 杜絕空中斷電重啟後二次點火。
-   * EKF 校準不再裸跳設 1：EKF_Init 已自 Flash SysFlags（CRC+magic）還原校準；
-   * 若 SysFlags 損毀則 EKF 將以 unhealthy 進入 P0-C raw-baro 降級鏈，開傘不受阻。 */
   FlashRingPacket_t last_pkt;
   uint8_t pkt_valid = (FlashRing_GetLastPacket(&last_pkt) == W25QXX_OK) ? 1U : 0U;
+#else
+  uint8_t pkt_valid = 0;
+  FlashRingPacket_t last_pkt = {0};
+#endif
 
   /* 取當下首筆 baro 供高度連續性檢查（與主迴圈相同的 TIM3 遮蔽保護） */
   __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
@@ -1958,7 +2157,7 @@ void StartDefaultTask(void *argument)
       EKF_HotRestartRestore((float)last_pkt.ekf_pos_z_cm / 100.0f,
                             (float)last_pkt.ekf_vel_z_cms / 100.0f, hs_q);
 
-      printf("[FSM] ⚠️ HOT-RESTART：恢復狀態 %d（drogue_fired=%u），飛行 tick %lu ms\r\n",
+      printf("[FSM] [WARNING] HOT-RESTART：恢復狀態 %d（drogue_fired=%u），飛行 tick %lu ms\r\n",
              (int)hs.state, hs.drogue_fired, (unsigned long)last_pkt.tick_ms);
   } else {
       current_fsm_state = STATE_PAD; // 正常地面起飛（或驗證未過回 PAD 重校準）
@@ -2229,6 +2428,13 @@ void StartDefaultTask(void *argument)
         FSM_Update();
     }
 
+#if FEATURE_LINK
+    /* 板間鏈路：每 LINK_TX_PERIOD_MS 廣播自身狀態（主板開傘通知據此抑制備板）。 */
+    if (tick % LINK_TX_PERIOD_MS == 0) {
+        Link_PublishTick();
+    }
+#endif
+
     /* === GPS（USART6 NMEA）：每迴圈嘗試消化一整句 ===
      * 無整句就緒時僅檢查旗標，極輕量；循環 DMA + IDLE 事件已於背景組句。
      * 每迴圈呼叫可即時排空單句緩衝，避免連續輸出時被新句覆蓋。 */
@@ -2353,7 +2559,9 @@ void StartDefaultTask(void *argument)
         
         ring_pkt.fsm_state   = (uint8_t)current_fsm_state;
         
+#if FEATURE_FLASH
         FlashRing_WritePacket(&ring_pkt);
+#endif
     }
 
     /* === P0-E：1Hz 電池電壓 ADC 讀取（自 50Hz Flash 寫入路徑移出；唯一 ADC 讀取點） === */
@@ -2361,6 +2569,7 @@ void StartDefaultTask(void *argument)
         g_bat_voltage_mv = ADC_Read_Battery_mv();
     }
 
+#if FEATURE_FLASH
     /* === P0-E：PAD/INIT 期背景預擦（每 1s 擦 1 個 sector，單次最壞 ~400ms < IWDG 2.05s）
      * 發射檢核表：上架後等待 [FLASH] pool 達 64 再允許起飛。 === */
     if (tick % 1000 == 500 && current_fsm_state <= STATE_PAD) {
@@ -2370,6 +2579,7 @@ void StartDefaultTask(void *argument)
                    (unsigned)FLASH_RING_PREERASE_TARGET);
         }
     }
+#endif
 
     /* === 每 100ms：10 Hz UART 遙測輸出 (減少 CPU 阻塞開銷)
      * P0-E：飛行態（BOOST..MAIN_DEPLOY）抑制 —— 每行 ~8.7ms 阻塞 UART，

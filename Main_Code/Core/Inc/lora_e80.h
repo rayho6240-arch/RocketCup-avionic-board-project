@@ -29,11 +29,12 @@ extern "C" {
  *   按在 reset（RST 拉低、CS 拉高）—— SX126x 於 NRST 拉低時所有腳位呈高阻，
  *   E80 因此「物理斷開」於 SPI3 共用的 SCK/MISO/MOSI，不會污染與其同匯流排
  *   的 W25Q128 Flash 讀寫（飛行資料記錄優先）。
- *   ★ E80 920MHz 鏈路目前停用（bring-up 問題待解）。硬體修好後改回 1 即恢復。
+ *   ★ E80 920MHz 鏈路目前已啟用（=1）。若 bring-up／共用匯流排異常需隔離，改回 0
+ *     即停用並按住 reset 釋放 SPI3（保護同匯流排的 Flash 飛行記錄）。
  * LORA920_ENABLE = 1：正常初始化；若偵測失敗（含 MISO 接地/浮空）亦會自動
  *   走 Shutdown 隔離，故障的 E80 絕不被放任掛在 SPI3 上。 */
 #ifndef LORA920_ENABLE
-#define LORA920_ENABLE 0
+#define LORA920_ENABLE 1
 #endif
 
 /**
@@ -66,11 +67,55 @@ HAL_StatusTypeDef LoRaE80_Send(const uint8_t *data, uint8_t len);
 /** @brief 是否可開始新的一筆發送（已初始化、BUSY 低、且無 TX 進行中）。 */
 uint8_t LoRaE80_IsReady(void);
 
-/** @brief DIO1(EXTI4) 中斷服務：設定 TxDone 旗標。由 HAL_GPIO_EXTI_Callback 呼叫。 */
+/** @brief DIO1(EXTI4) 中斷服務：設定 TxDone / RxDone 事件旗標。由 HAL_GPIO_EXTI_Callback 呼叫。 */
 void LoRaE80_OnDio1IRQ(void);
+
+/* ============================================================
+ *  地面站接收（ROLE_GROUND）：E80 改作 LoRa 連續接收
+ * ============================================================ */
+
+/** @brief 設定並進入 LoRa 連續接收模式（RxDone/CrcErr/Timeout → DIO1）。
+ *  須先 LoRaE80_Init() 設好 RF（頻率/SF/BW/CR/sync）。 */
+HAL_StatusTypeDef LoRaE80_StartRx(void);
+
+/** @brief DIO1 是否曾觸發（有封包待讀的輪詢提示）。 */
+uint8_t LoRaE80_RxReady(void);
+
+/**
+ * @brief 讀出一筆已接收的 LoRa 封包。
+ *        流程：GetIrqStatus → (CRC/表頭錯則丟) → GetRxBufferStatus → ReadBuffer →
+ *        GetPacketStatus → 清 IRQ。連續接收模式下晶片維持 RX，無需重新 SetRx。
+ * @param buf      輸出緩衝（須 >= 255 bytes）。
+ * @param len      輸出 payload 長度。
+ * @param rssi_dbm 輸出 RSSI (dBm)；可為 NULL。
+ * @param snr_q    輸出 SNR（SX126x 原始有號值，dB = snr_q/4）；可為 NULL。
+ * @return HAL_OK 取得有效封包；HAL_BUSY 尚無 RxDone；HAL_ERROR CRC/表頭錯或參數錯；
+ *         HAL_TIMEOUT SPI/BUSY 逾時。
+ */
+HAL_StatusTypeDef LoRaE80_ReadPacket(uint8_t *buf, uint8_t *len, int16_t *rssi_dbm, int16_t *snr_q);
 
 /** @brief 填入初始化診斷結果供週期性遙測輸出。gs = GetStatus byte (0x22=OK). */
 void LoRaE80_GetInitDiag(int *rd_st, uint8_t *busy, uint8_t *rb0, uint8_t *rb1, uint8_t *gs);
+
+/* ============================================================
+ *  地面站通訊測試：動態修改 RF 參數
+ * ============================================================ */
+
+/**
+ * @brief 動態重新配置 E80 RF 參數並重啟連續接收。
+ *        進入 Standby → 更新頻率/調變/功率/前導碼 → StartRx。
+ *        LDRO 依 SF 與 BW 自動計算（符號時間 ≥ 16ms 時啟用）。
+ * @param freq_hz  中心頻率 (Hz)，例如 920000000
+ * @param sf       展頻因子 7~12（SX126x 值 = sf）
+ * @param bw       頻寬 index（SX126x 定義：0x04=125kHz, 0x05=250kHz, 0x06=500kHz 等）
+ * @param cr       編碼率 1~4（SX126x 定義：1=4/5, 2=4/6, 3=4/7, 4=4/8）
+ * @param pwr_dbm  發射功率 dBm (-3~22)
+ * @param preamble 前導碼符號數 (6~65535)
+ * @return HAL_OK 已完成並重啟 RX；HAL_ERROR 未初始化；HAL_TIMEOUT SPI 逾時。
+ * @note  僅在地面站 (IS_GROUND) 建置下有意義，其他角色仍可呼叫但通常無作用。
+ */
+HAL_StatusTypeDef LoRaE80_Reconfig(uint32_t freq_hz, uint8_t sf, uint8_t bw,
+                                    uint8_t cr, int8_t pwr_dbm, uint16_t preamble);
 
 #ifdef __cplusplus
 }

@@ -21,6 +21,21 @@ extern "C" {
 #endif
 
 #include "stm32f4xx_hal.h"
+#include "board_config.h"   /* IS_GROUND（地面站 433 接收不受本開關影響） */
+
+/* ============================================================
+ *  模組啟用開關
+ * ============================================================
+ * LORA433_ENABLE = 0：主航電開機不初始化 E22，遙測任務不重試亦不發送 433 下行。
+ *   E22 走獨立 UART3（不與 Flash 共用匯流排，無 E80 那種匯流排污染風險），停用僅
+ *   代表不啟用該鏈路；模組維持 CubeMX 預設腳位（M0=M1=0 透傳、RST 釋放、AUX 輸入），
+ *   未被餵入資料故不發射。★ 目前已啟用（=1）；如需停用（例如排查 3V3 短路、或不掛 433）
+ *   改回 0。
+ *   註：地面站（ROLE_GROUND）的 433「接收」固定啟用、不受本開關影響。
+ * LORA433_ENABLE = 1：正常初始化；AUX 逾時（模組未回應）時由遙測任務每 10s 週期性重試。 */
+#ifndef LORA433_ENABLE
+#define LORA433_ENABLE 1
+#endif
 
 /**
  * @brief 綁定 UART 並將模組設為透傳模式（M0=M1=0）+ 硬體重置，等 AUX 拉高。
@@ -39,6 +54,15 @@ HAL_StatusTypeDef LoRaE22_Send(const uint8_t *data, uint16_t len);
 
 /** @brief 模組是否空閒可發送（AUX=HIGH 且已初始化）。 */
 uint8_t LoRaE22_IsReady(void);
+
+/**
+ * @brief 動態修改 E22 433 透傳頻率（進入設定模式寫 CH 暫存器後回透傳模式）。
+ *        CH = freq_mhz - 410；合法範圍 410~493 MHz（CH 0~83）。
+ *        設定存入 EEPROM，掉電不遺失。僅供地面站通訊測試使用。
+ * @param freq_mhz 目標頻率 MHz (410~493)
+ * @return HAL_OK 成功；HAL_ERROR 範圍錯誤或未初始化；HAL_TIMEOUT AUX 等待逾時。
+ */
+HAL_StatusTypeDef LoRaE22_SetFreqMHz(uint32_t freq_mhz);
 
 #ifdef __cplusplus
 }
