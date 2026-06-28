@@ -11,16 +11,25 @@
 #include "gs_log.h"        /* GS_LINK_433/920, GS_RSSI_NA, GS_SNR_NA */
 #include "telemetry.h"     /* TELEM_PACKET_SIZE（空中時間估算用） */
 #include "lora_calc.h"     /* 純換算 + lora_stats_t */
+#include "uplink_proto.h"  /* 上行手動開傘命令框架（與火箭端共用） */
 #include "lora_e22.h"
 #include "lora_e80.h"
 #include "main.h"
+#include "cmsis_os.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 
 extern UART_HandleTypeDef huart2;
-extern SPI_HandleTypeDef  hspi3;   /* E80 重新初始化用 */
+extern UART_HandleTypeDef huart3;   /* E22 433 透傳（上行命令發送用） */
+extern SPI_HandleTypeDef  hspi3;    /* E80 重新初始化用 */
+extern IWDG_HandleTypeDef hiwdg;    /* 上行 burst 期間餵狗 */
+
+/* 上行命令以 burst 重複送 ~3s，確保落在火箭每 ~2s 一次的 1/10 接收窗 */
+#define UPLINK_TX_REPEAT  24U
+#define UPLINK_TX_GAP_MS  120U
+static uint8_t s_uplink_seq = 0;
 
 /* ============================================================
  *  UART2 環形接收緩衝
@@ -89,6 +98,13 @@ static void print_help(void)
            "  e80 init          重新初始化 E80 並進入接收\r\n"
            "  e80 rxstart       重新進入連續接收\r\n"
            "  e80 airtime <len> 估算指定 payload 長度的空中時間\r\n"
+           "  --- 上行手動開傘（433 反向，兩段式安全）---\r\n"
+           "  ping              連線測試（火箭印出，不動作）\r\n"
+           "  arm               武裝（火箭 30s 內允許開傘）\r\n"
+           "  disarm            解除武裝\r\n"
+           "  deploy drogue     手動開副傘（須先 arm）\r\n"
+           "  deploy main       手動開主傘（須先 arm）\r\n"
+           "  deploy both       手動同時開副傘+主傘（須先 arm）\r\n"
            "=====================================================\r\n");
 }
 
@@ -177,6 +193,24 @@ static void apply_e80_reconfig(void)
 }
 
 /* ============================================================
+ *  上行命令發送（手動開傘等，經 E22 433 反向打給火箭）
+ * ============================================================ */
+static void uplink_send(uint8_t cmd, uint8_t arg, const char *label)
+{
+    uint8_t f[UPLINK_FRAME_SIZE];
+    uint8_t seq = s_uplink_seq++;
+    UplinkProto_Build(f, cmd, arg, seq);
+    printf("[UPLINK] 送 %s (cmd=0x%02X seq=%u) ×%u burst (~3s)…\r\n",
+           label, (unsigned)cmd, (unsigned)seq, (unsigned)UPLINK_TX_REPEAT);
+    for (uint8_t i = 0; i < UPLINK_TX_REPEAT; i++) {
+        LoRaE22_Send(f, UPLINK_FRAME_SIZE);   /* 忙線跳過；burst 重複確保命中接收窗 */
+        HAL_IWDG_Refresh(&hiwdg);
+        osDelay(UPLINK_TX_GAP_MS);
+    }
+    printf("[UPLINK] %s 送出完畢（看下行 DROGUE_FIRED/MAIN_DEPLOYED 旗標確認）\r\n", label);
+}
+
+/* ============================================================
  *  命令解析
  * ============================================================ */
 static void str_tolower(char *s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
@@ -199,6 +233,26 @@ static void dispatch_cmd(char *line)
 
     if (strcmp(tok[0], "help") == 0) {
         print_help();
+
+    } else if (strcmp(tok[0], "ping") == 0) {
+        uplink_send(UPLINK_CMD_PING, 0, "PING");
+
+    } else if (strcmp(tok[0], "arm") == 0) {
+        uplink_send(UPLINK_CMD_ARM, 0, "ARM");
+
+    } else if (strcmp(tok[0], "disarm") == 0) {
+        uplink_send(UPLINK_CMD_DISARM, 0, "DISARM");
+
+    } else if (strcmp(tok[0], "deploy") == 0 && n >= 2) {
+        if (strcmp(tok[1], "drogue") == 0) {
+            uplink_send(UPLINK_CMD_DEPLOY_DROGUE, 0, "DEPLOY-DROGUE");
+        } else if (strcmp(tok[1], "main") == 0) {
+            uplink_send(UPLINK_CMD_DEPLOY_MAIN, 0, "DEPLOY-MAIN");
+        } else if (strcmp(tok[1], "both") == 0) {
+            uplink_send(UPLINK_CMD_DEPLOY_BOTH, 0, "DEPLOY-BOTH");
+        } else {
+            printf("[UPLINK] 用法：deploy drogue|main|both（須先 arm）\r\n");
+        }
 
     } else if (strcmp(tok[0], "ver") == 0) {
         print_version();
@@ -309,6 +363,9 @@ static void dispatch_cmd(char *line)
 void GsLoraTest_Init(void)
 {
     stats_reset_all();
+    /* 地面站 E22 預設只收；初始化驅動（透傳模式 M0=M1=0 + reset）使其也能發上行命令。
+     * 須在 GroundStation_Run 掛載 USART3 ReceiveToIdle 之前呼叫（本函式即在其前）。 */
+    LoRaE22_Init(&huart3);
     HAL_UARTEx_ReceiveToIdle_IT(&huart2, s_u2_rxbuf, sizeof(s_u2_rxbuf));
     printf("[TEST] LoRa 通訊測試模組就緒（UART2 460800），輸入 help\r\n");
 }

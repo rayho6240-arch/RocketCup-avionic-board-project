@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../Main_Code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc
+BINS := test_sensor_axis test_fsm test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto
 
 .PHONY: run clean
 
@@ -53,6 +53,9 @@ test_link: test_link.c ../Main_Code/Core/Src/link.c ../Main_Code/Core/Src/link_p
 
 test_lora_calc: test_lora_calc.c ../Main_Code/Core/Inc/lora_calc.h
 	$(CC) $(CFLAGS) -o $@ test_lora_calc.c $(LDLIBS)
+
+test_uplink_proto: test_uplink_proto.c ../Main_Code/Core/Inc/uplink_proto.h ../Main_Code/Core/Inc/crc16.h
+	$(CC) $(CFLAGS) -o $@ test_uplink_proto.c $(LDLIBS)
 
 clean:
 	rm -f $(BINS)

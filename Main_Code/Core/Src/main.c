@@ -41,6 +41,7 @@
 #include "link_hw.h"       /* 板間鏈路（USART2 全雙工）；FEATURE_LINK 下編入 */
 #include "ground_station.h" /* 地面站主流程（IS_GROUND 下編入；其餘角色為空） */
 #include "gs_lora_test.h"   /* 地面站 LoRa 通訊測試模組（UART2 命令 + 雙鏈路統計） */
+#include "uplink_cmd.h"     /* 上行手動開傘（FEATURE_UPLINK_DEPLOY 下編入；其餘為空） */
 #include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
 #include <stdio.h>
 #include <string.h>
@@ -382,6 +383,11 @@ int main(void)
   } else {
       printf("[LORA] E22 433MHz AUX 逾時（模組未回應），遙測任務將週期性重試。\r\n");
   }
+#if FEATURE_UPLINK_DEPLOY
+  /* 主航電：在下行之外開啟 USART3 上行接收（地面站手動開傘命令）。
+   * E22 透傳模式不發送時即在接收；遙測任務每 10 槽空出 1 槽不發 433 留給上行。 */
+  UplinkCmd_Init();
+#endif
 #else
   lora433_ok = 0;
   printf("[LORA433] disabled (LORA433_ENABLE=0) — 433 下行停用，UART3 不發送。\r\n");
@@ -1636,6 +1642,34 @@ static void FSM_Update(void)
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
     }
 #endif
+
+#if FEATURE_UPLINK_DEPLOY
+    /* 上行手動開傘（地面站 433 命令，uplink_cmd 已經 ARM→DEPLOY 兩段式驗證）。
+     * 與 FSM 自動點火並存：直接驅動點火輸出並鎖存 drogue_fired（防 FSM 二次點火）；
+     * 下行 DROGUE_FIRED/MAIN_DEPLOYED 旗標（由 PD13/TIM4 實際狀態推導）即為地面站確認。 */
+    {
+        static uint8_t  s_man_drogue_active = 0U;
+        static uint32_t s_man_drogue_tick   = 0U;
+        uint8_t man_drogue = 0U, man_main = 0U;
+        if (UplinkCmd_TakeDeploy(&man_drogue, &man_main)) {
+            if (man_drogue) {
+                HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);   // 手動副傘引爆 MOSFET
+                g_fsm_ctx.drogue_fired = 1U;
+                s_man_drogue_active = 1U;
+                s_man_drogue_tick   = now;
+            }
+            if (man_main) {
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);          // 手動主傘舵機釋放角度
+            }
+        }
+        /* 手動副傘導通限時保護：FSM_PYRO_HOLD_MS 後斷開 MOSFET（同 FSM 自身點火限時）。 */
+        if (s_man_drogue_active && (now - s_man_drogue_tick) >= FSM_PYRO_HOLD_MS) {
+            HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);
+            s_man_drogue_active = 0U;
+        }
+    }
+#endif
+
     if (act.start_buzzer) {
         // 開啟板載尋標蜂鳴器（持續鳴叫，利於落點尋標）
         htim2.Instance->ARR  = 999;
@@ -1737,6 +1771,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     if (huart->Instance == USART3) GroundStation_OnUart3RxEvent(Size);  /* E22 433 透傳 RX */
     if (huart->Instance == USART2) GsLoraTest_OnUart2RxEvent(Size);     /* 通訊測試命令介面 */
 #endif
+#if FEATURE_UPLINK_DEPLOY
+    if (huart->Instance == USART3) UplinkCmd_OnUart3RxEvent(Size);      /* 主航電：433 上行命令 RX */
+#endif
 #if (!FEATURE_GPS && !FEATURE_LINK && !IS_GROUND)
     (void)huart; (void)Size;
 #endif
@@ -1797,10 +1834,12 @@ void SPI3_Bus_Unlock(void)
  * 兩條鏈路各自靠 AUX/BUSY + TxDone 背壓自我限流（忙線即跳過），互不阻塞。
  * 低優先任務：blocking UART 傳輸會被高優先飛控任務搶佔，完全不影響 1kHz 迴圈時序。 */
 #define LORA_TELEM_PERIOD_MS  200U   /* 5Hz 嘗試率（實際受空中速率限制，可於此調整） */
+#define UPLINK_LISTEN_EVERY   10U    /* 每 N 個 433 時槽空出 1 槽不發射，留給地面站上行 */
 void LoRaTelemetry_Task(void *argument)
 {
     (void)argument;
     static uint8_t tx_buf[TELEM_PACKET_SIZE];
+    uint32_t slot = 0;   /* 433 時槽計數（用於空出上行接收窗） */
 
     /* 讓開機自檢 / SD 掛載 / FlashRing 初始化先跑一段再開始發送（非必要，SPI3 mutex 已保護）。 */
     osDelay(2000);
@@ -1824,13 +1863,24 @@ void LoRaTelemetry_Task(void *argument)
         }
 #endif
 
+#if FEATURE_UPLINK_DEPLOY
+        /* 上行接收窗：每 UPLINK_LISTEN_EVERY 槽空出 1 槽不發 433（E22 透傳此時即在接收），
+         * 讓地面站的上行命令有空中無干擾時段可被收到。920 下行不受影響、維持全速率。 */
+        uint8_t listen_slot = ((slot % UPLINK_LISTEN_EVERY) == (UPLINK_LISTEN_EVERY - 1U));
+        if (lora433_ok && !listen_slot) {
+            LoRaE22_Send(tx_buf, len);
+        }
+        UplinkCmd_Poll(HAL_GetTick());            /* 解析上行、處理 ARM/DEPLOY、ARM 逾時 */
+#else
         if (lora433_ok) {
             LoRaE22_Send(tx_buf, len);            /* 忙線(AUX low)回 HAL_BUSY，本次跳過 */
         }
+#endif
         if (lora920_ok) {
             LoRaE80_Send(tx_buf, (uint8_t)len);   /* 非阻塞；前次 TX 未完成則跳過 */
         }
 
+        slot++;
         wake += LORA_TELEM_PERIOD_MS;
         osDelayUntil(wake);
     }
