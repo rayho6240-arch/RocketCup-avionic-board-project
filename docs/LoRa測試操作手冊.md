@@ -1,0 +1,232 @@
+# 📡 LoRa 通訊測試操作手冊（地面站 / ROLE_GROUND）
+
+本手冊說明如何用一台電腦，透過地面站板的 **UART2** 即時調整 LoRa RF 參數
+（E22 433MHz / E80 920MHz）並觀察通訊品質統計，用於 bring-up 與鏈路調校。
+
+> 對應程式：
+> - [`gs_lora_test.c`](../Main_Code/Core/Src/gs_lora_test.c) — UART2 命令介面 + 雙鏈路統計
+> - [`lora_calc.h`](../Main_Code/Core/Inc/lora_calc.h) — 純換算 / 統計（host 可測，見 [`tests/test_lora_calc.c`](../tests/test_lora_calc.c)）
+> - [`lora_e80.c`](../Main_Code/Core/Src/lora_e80.c) — **LR1121** 驅動（E80）
+> - [`lora_e22.c`](../Main_Code/Core/Src/lora_e22.c) — E22 透傳驅動
+
+---
+
+## 1. 架構概觀
+
+```
+                 ┌─────────────────── 地面站板 (ROLE_GROUND) ───────────────────┐
+   ┌────────┐    │  UART2 (PA2/PA3, 460800 8N1)                                 │
+   │   PC   │◄──►│   ├─ RX：解析文字命令（調頻率/SF/BW…、查統計）              │
+   │ 終端機 │    │   └─ TX：printf 回應、統計輸出（測試「控制台」）            │
+   └────────┘    │                                                              │
+                 │  E22 433MHz (UART3 透傳)  ─┐                                  │
+                 │  E80 920MHz (LR1121, SPI3)─┴► telem_rx 解析 → 統計           │
+   ┌────────┐    │                                                              │
+   │USB-CDC │◄───┤  USB 虛擬序列埠：串流收到的遙測 CSV（資料「資料流」）       │
+   │ (資料) │    │                                                              │
+   └────────┘    └──────────────────────────────────────────────────────────────┘
+                            ▲ 空中下行遙測
+                 ┌──────────┴──────────┐
+                 │   火箭主航電 (TX)    │  E22 433 + E80 920 同時下行
+                 └─────────────────────┘
+```
+
+**兩條序列埠各司其職：**
+| 埠 | 用途 | 鮑率 |
+| :-- | :-- | :-- |
+| **UART2** (PA2/PA3) | 測試控制台：打命令、看統計與回應 | 460800 8N1 |
+| **USB-CDC** | 純資料流：收到的遙測 CSV（給記錄/繪圖） | USB 虛擬埠 |
+
+---
+
+## 2. 硬體接線
+
+E22 / E80 已焊在航電板上（接線見 [連線和基本硬體規格表.md](連線和基本硬體規格表.md)）。
+測試只需把 **UART2** 接到電腦：
+
+| 地面站板 | USB-TTL 轉接器 (如 CP2102/CH340) |
+| :-- | :-- |
+| `PA2` (USART2_TX) | RXD |
+| `PA3` (USART2_RX) | TXD |
+| `GND` | GND |
+
+> ⚠️ TX↔RX 必須交叉。USB-TTL 的 VCC **不要**接（板子自有供電）。
+> ⚠️ 轉接器邏輯準位須為 **3.3V**（勿用 5V TTL 直連 STM32）。
+
+天線：E22 / E80 **務必接好對應頻段天線**再上電，空載發射可能損壞 PA。
+
+---
+
+## 3. 編譯與燒錄
+
+```bash
+make build-ground      # 編譯地面站 binary（BOARD_ROLE=ROLE_GROUND）
+make flash-ground      # 編譯 + 透過 ST-Link 燒錄
+```
+
+> 主/備航電不受影響：`gs_lora_test` 整檔以 `#if IS_GROUND` 包住。
+
+---
+
+## 4. 連線終端機
+
+序列埠參數：**460800 / 8 / N / 1**，無流量控制。
+
+macOS（內建 screen）：
+```bash
+ls /dev/cu.usbserial-*          # 找出轉接器埠號
+screen /dev/cu.usbserial-XXXX 460800
+# 離開：Ctrl-A 再按 K，然後 y
+```
+或用 `minicom -D /dev/cu.usbserial-XXXX -b 460800`、CoolTerm、PuTTY 等。
+
+> 命令以 **Enter** 結尾即可（程式接受 `\r`、`\n`、`\r\n`）。
+> 上電後會看到：`[TEST] LoRa 通訊測試模組就緒（UART2 460800），輸入 help`
+
+---
+
+## 5. 命令參考
+
+| 命令 | 說明 |
+| :-- | :-- |
+| `help` | 顯示命令清單 |
+| `ver` | 顯示 E80(LR1121) 版本與初始化診斷（HW / Type=0x03 / Stat1） |
+| `stats` | 顯示雙鏈路統計 |
+| `stats reset` | 清除統計計數器 |
+| `stats auto <sec>` | 每 N 秒自動列印統計（`stats auto 0` 關閉） |
+| `e22 freq <mhz>` | 設 E22 頻率 410–493 MHz（寫入 EEPROM，掉電保留） |
+| `e22 show` | 顯示 E22 目前頻率 / 通道 |
+| `e80 freq <hz>` | 設 E80 中心頻率（Hz，例 `e80 freq 915000000`） |
+| `e80 sf <7-12>` | 設 E80 展頻因子 |
+| `e80 bw <idx>` | 設 E80 頻寬 index（見 §8） |
+| `e80 cr <1-4>` | 設 E80 編碼率（1=4/5 … 4=4/8） |
+| `e80 pwr <dbm>` | 設 E80 發射功率 −9~22 dBm |
+| `e80 pre <n>` | 設 E80 前導碼長度 6~65535 |
+| `e80 show` | 顯示 E80 RF 參數 + 空中時間估算 |
+| `e80 airtime <len>` | 估算指定 payload 長度的空中時間 / 等效 bitrate |
+| `e80 init` | 重新初始化 E80（LR1121）並進入接收 |
+| `e80 rxstart` | 重新進入連續接收 |
+
+**統計輸出範例：**
+```
+[STATS] --- E80-920 ---
+[STATS] pkt_ok=412  crc_err=3
+[STATS] rate=9.8 pkt/s  elapsed=42s
+[STATS] RSSI: last=-87 min=-95 max=-71 avg=-86 dBm
+[STATS] SNR:  last=36 min=8 max=44 avg=30 (x0.25dB)   ← dB = 數值 ÷ 4
+```
+> E22 為透傳模式，**無逐包 RSSI/SNR**，只統計封包數 / CRC 錯誤 / 封包率。
+
+---
+
+## 6. 典型測試流程
+
+### A. 快速健檢（確認 E80 在線）
+```
+ver           → Type 應為 0x03（LR1121）、Stat1 非 0x00/0xFF
+e80 show      → 確認頻率/SF/BW 與火箭 TX 一致
+stats auto 5  → 每 5 秒看統計，確認 pkt_ok 持續增加
+```
+
+### B. 比較不同 SF 的距離 / 穩定度
+```
+stats reset
+e80 sf 7      → 走遠，記錄 rate / RSSI / crc_err
+stats reset
+e80 sf 10     → 同一距離再測，比較靈敏度與封包率
+```
+> SF 越高靈敏度越好但空中時間越長（`e80 show` 可看 airtime）。
+
+### C. 掃頻找乾淨頻道
+```
+e80 freq 920000000
+stats reset
+stats auto 3
+... 觀察 → 換 e80 freq 921000000 ... 比較 crc_err / RSSI 底噪
+```
+
+> ⚠️ **關鍵：地面站改參數只改「接收端」。** 要實際通訊，火箭主航電 TX 必須用
+> **相同**的頻率 / SF / BW / CR / sync word。本工具用途是「找到好參數」，
+> 找到後把同一組值同步寫到主航電（`lora_e80.c` / `lora_e22.c` 的 `#define`）兩邊一致。
+
+---
+
+## 7. ⚠️ 上板驗證清單（LR1121 板級項目）
+
+E80-900M2213S 核心是 **Semtech LR1121**。下列為「板級」設定，集中在
+[`lora_e80.c`](../Main_Code/Core/Src/lora_e80.c) 頂部 `#define`，**務必對照 E80
+規格書逐項驗證**，否則最常見的症狀是「`ver` 正常但完全收不到封包」：
+
+- [ ] **RF 開關真值表（最關鍵）** `E80_RFSW_*`
+  LR1121 的 **DIO5=RFSW0、DIO6=RFSW1** 控制模組內建 RF 開關。預設採 Semtech
+  LR1121 參考設計（RX=RFSW0 高、TX_HP=RFSW1 高）。若 E80 接線不同，**收發 RF 完全不通**。
+  驗證：`ver` 能讀到 LR1121 但 `stats` 永遠 0 封包 → 高度懷疑此項。
+- [ ] **參考振盪器** `E80_USE_TCXO`
+  E80 內建 32MHz 主動式振盪器。預設 `0`（視為自供電 clipped-sine 進 XTA）。
+  若 bring-up 顯示頻率嚴重偏移 / 收不到 → 試 `=1`（LR1121 供電 TCXO，須重校準）。
+- [ ] **IRQ 對應的 LR1121 DIO**
+  程式把 RX/TX 事件放在 `SetDioIrqParams` 的 **dio1 遮罩**，假設模組 INT 腳
+  （板上 PD4/EXTI4）接 LR1121 **DIO9**。若實際接其他 DIO，需改 `e80_set_dio_irq()`。
+  驗證：能收（`e80 init` 後手動 poll 有資料）但 `RxReady()` 一直 0 → 懷疑 IRQ 沒進。
+- [ ] **頻率 / SF / BW / CR / sync word 與主航電一致**
+  兩端任一不符即收不到。sync word 預設 `0x12`（私有）。
+- [ ] **天線與功率** 發射端 22dBm，務必接天線；近距離測試可降 `e80 pwr` 避免飽和。
+
+> 完成驗證後，請把確認過的數值更新到本手冊與 `lora_e80.c`，並於
+> [進度.md](進度.md) / [待確認、改進清單.md](待確認、改進清單.md) 記錄。
+
+---
+
+## 8. 參數對照表
+
+**LoRa 頻寬 index（`e80 bw <idx>`，LR1121 值）：**
+
+| idx | 頻寬 | idx | 頻寬 |
+| :-: | :-- | :-: | :-- |
+| 0x03 | 62.5 kHz | 0x05 | 250 kHz |
+| 0x04 | 125 kHz | 0x06 | 500 kHz |
+
+（更窄：0x00=7.8k, 0x01=15.6k, 0x02=31.25k, 0x08=10.4k, 0x09=20.8k, 0x0A=41.7k）
+
+**展頻因子：** SF7~SF12（值即數字）。**編碼率：** 1=4/5, 2=4/6, 3=4/7, 4=4/8。
+
+**LDRO（低資料率最佳化）：** 由韌體自動依「符號時間 ≥ 16ms」判定
+（例 BW125 下 SF11/SF12 自動開），無需手動設定。
+
+**空中時間參考**（顯式表頭 + CRC on，preamble=8，payload≈79B 遙測封包，用 `e80 airtime` 即時算）：
+SF 每 +1、空中時間約 ×2；BW ×2、空中時間約 ÷2。
+
+---
+
+## 9. 疑難排解
+
+| 症狀 | 排查 |
+| :-- | :-- |
+| 終端機沒任何輸出 | 鮑率非 460800？TX/RX 沒交叉？GND 沒共地？ |
+| 命令沒反應 | 有按 Enter？輸入 `help` 測試；確認轉接器 3.3V |
+| `ver` Type≠0x03 / Stat1=0x00 或 0xFF | SPI 不通：MISO 接地(0x00)/浮空(0xFF)；查 CS/SCK/接線 |
+| `ver` 正常但 `stats` 一直 0 封包（E80） | **RF 開關 `E80_RFSW_*`**（§7 第一項）；天線；與 TX 參數不一致 |
+| E80 收不到、E22 正常 | LR1121 板級項（RF 開關 / IRQ DIO / TCXO） |
+| E22 收不到、E80 正常 | E22 頻道與 TX 不符（`e22 show`）；UART3 接線；M0/M1 模式 |
+| crc_err 很高 | 訊號弱（看 RSSI/SNR）、頻道干擾（換頻）、兩端參數不完全一致 |
+| 改了參數後反而全斷 | 只改了地面站；火箭 TX 未同步成相同參數 |
+
+---
+
+## 10. 附錄：為什麼 E80 驅動要對 LR1121 重寫
+
+E80-900M2213S 的核心是 **LR1121**，與 SX126x 命令協定截然不同。早期驅動誤用
+SX126x 指令集，在 LR1121 上**完全不會動作**。主要差異：
+
+| 項目 | SX126x（錯誤假設） | LR1121（E80 實際） |
+| :-- | :-- | :-- |
+| opcode | 1 byte（`0x86`） | **2 bytes**（`0x020B`） |
+| 設頻率 | `Frf=f·2²⁵/32e6` 公式 | **直接 Hz**，4 bytes 大端 |
+| 讀回應 | 同一次 SPI 交易 | **獨立第二次交易**（先 Stat1） |
+| LoRa 封包型態 | `0x01` | **`0x02`** |
+| LoRa sync word | 2-byte 暫存器 `0x0740` | **1-byte** 命令 `0x022B` |
+| IRQ 遮罩 | 16-bit | **32-bit**；狀態含於 GetStatus |
+| PA / RF 開關 | SX126x PA | **HP PA + DIO5/DIO6 RF 開關（必設）** |
+
+opcode 與位元組佈局依 Semtech LR1121 User Manual / SWDR001 驅動核對。
+板級項（RF 開關真值表、TCXO、IRQ DIO）仍須依 §7 於實機驗證。

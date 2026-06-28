@@ -1,16 +1,20 @@
 /**
  ******************************************************************************
  * @file    lora_e80.h
- * @brief   E80-900M2213S 920MHz LoRa 驅動 (SX126x/LLCC68 命令相容, SPI3)
+ * @brief   E80-900M2213S 920MHz LoRa 驅動 (Semtech LR1121, SPI3)
  *
- * E80-900M2213S 以 Semtech SX126x/LLCC68 為核心，SPI 命令協定相同。
+ * ★ E80-900M2213S 的核心是 Semtech **LR1121**（非 SX126x）。命令協定差異大：
+ *   16-bit opcode、頻率以 Hz 直接帶入、讀回應走獨立第二次 SPI 交易、LoRa 封包
+ *   型態=0x02、單一位元組 sync word、32-bit IRQ、HP PA + DIO5/DIO6 RF 開關。
+ *   詳見 lora_e80.c 檔頭。
  * 接線（連線和基本硬體規格表.md）：SPI3(SCK=PB3/MISO=PB4/MOSI=PB5),
- *   CS=PD7(CSB_LORA920), RST=PD5, DIO1/INT=PD4(EXTI4 rising), BUSY=PD6。
+ *   CS=PD7(CSB_LORA920), RST=PD5, IRQ(LR1121 DIO9)→PD4(EXTI4 rising), BUSY=PD6。
  * SPI3 與 W25Q128 Flash 共用 → 經 spi3_bus.h 的 SPI3_Bus_Lock/Unlock 互斥。
  *
- * ★ RF 參數（頻率/SF/BW/CR/PA/TCXO/RF-switch）集中於 lora_e80.c 頂部 #define，
- *   預設為多數 Ebyte 900MHz SX126x 模組之常見組態，但**務必於上板 bring-up
- *   時對照 E80-900M2213S 規格書與地面站設定逐項驗證**（尤其 TCXO 與 DIO2 RF switch）。
+ * ★ 板級參數（頻率/SF/BW/CR/PA/TCXO/RF-switch）集中於 lora_e80.c 頂部 #define。
+ *   **務必於上板 bring-up 對照 E80-900M2213S 規格書逐項驗證**，尤其：
+ *     - RF 開關真值表（DIO5=RFSW0 / DIO6=RFSW1）—— 設錯則收發 RF 完全不通；
+ *     - TCXO 供電方式；IRQ 對應之 LR1121 DIO。見 docs LoRa 測試操作手冊。
  ******************************************************************************
  */
 #ifndef __LORA_E80_H
