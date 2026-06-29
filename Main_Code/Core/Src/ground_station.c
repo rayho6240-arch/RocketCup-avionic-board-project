@@ -52,6 +52,37 @@ static uint32_t      s_last_fix_tick = 0;
 static char    s_row[GS_LOG_CSV_MAX];
 static uint8_t s_e80buf[255];
 
+/* ---- 指示燈（板上三顆，地面站用途）----
+ *   PE2 LED_SYS    : 心跳閃爍（1Hz）= 韌體存活、主迴圈在跑
+ *   PE3 LED_State1 : GPS 定位有效 = 恆亮（時間對齊錨點就緒）
+ *   PE4 LED_State2 : 接收活動 = 收到下行封包即短亮，隨流量閃爍
+ * 規格表標「低/高電平控制」；此處採 active-high（SET=亮，GPIO init 為 RESET=滅）。
+ * 若實際硬體為 active-low，將 GS_LED_ON/GS_LED_OFF 對調即可。 */
+#define GS_LED_ON       GPIO_PIN_SET
+#define GS_LED_OFF      GPIO_PIN_RESET
+#define GS_LED1_Pin     GPIO_PIN_3        /* PE3 LED_State1（main.h 未命名，直接用腳號） */
+#define GS_RX_LED_MS    120U              /* 收到封包後亮燈持續（製造每包可見閃爍） */
+#define GS_HEARTBEAT_MS 500U              /* LED_SYS 心跳半週期（1Hz 閃） */
+
+static volatile uint32_t s_last_pkt_tick = 0;   /* 最後一筆有效封包 tick（任一鏈路） */
+
+/* 依現況驅動三顆 LED。每個主迴圈週期呼叫一次。 */
+static void gs_leds_update(uint32_t now, uint8_t gps_fix)
+{
+    static uint32_t hb_tick = 0;
+    static uint8_t  hb_on   = 0;
+    if ((now - hb_tick) >= GS_HEARTBEAT_MS) {       /* PE2：心跳 */
+        hb_tick = now;
+        hb_on ^= 1U;
+        HAL_GPIO_WritePin(LED_SYS_GPIO_Port, LED_SYS_Pin, hb_on ? GS_LED_ON : GS_LED_OFF);
+    }
+    HAL_GPIO_WritePin(GPIOE, GS_LED1_Pin,            /* PE3：GPS fix 恆亮 */
+                      gps_fix ? GS_LED_ON : GS_LED_OFF);
+    uint8_t rx_active = (s_last_pkt_tick != 0) && ((now - s_last_pkt_tick) < GS_RX_LED_MS);
+    HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin,  /* PE4：接收活動 */
+                      rx_active ? GS_LED_ON : GS_LED_OFF);
+}
+
 /* ---- USART3（E22）位元組環形緩衝：ISR 推入、任務取出 ---- */
 #define U3_RING_SZ 1024U
 static volatile uint8_t  s_u3_ring[U3_RING_SZ];
@@ -150,6 +181,7 @@ static void gs_handle_packet(uint8_t link, const TelemetryPacket_t *pkt,
                              int16_t rssi, int16_t snr)
 {
     uint32_t rx_tick = HAL_GetTick();
+    s_last_pkt_tick = rx_tick;          /* 接收活動指示燈（PE4）用 */
     GsTimeSync_OnPacket(&s_ts, pkt->tick_ms, rx_tick, GS_TIMESYNC_EMA_SHIFT);
     uint32_t rx_utc = GsTimeSync_GroundUtcMs(&s_ts, rx_tick);
     uint32_t al_utc = GsTimeSync_RocketAlignedUtcMs(&s_ts, pkt->tick_ms);
@@ -212,6 +244,7 @@ static void gs_usb_selftest_loop(void)
         if (alt_m <= 0) { alt_m = 0; dir = 1; }
         tick += 100;
 
+        gs_leds_update(HAL_GetTick(), 0);   /* 自測無實體 GPS：心跳 + 接收活動仍會動 */
         HAL_IWDG_Refresh(&hiwdg);
         osDelay(100);   /* 10 Hz */
     }
@@ -222,6 +255,7 @@ void GroundStation_Run(void)
 {
     printf("\r\n[ROLE] GROUND_STATION  RX=E22(433)+E80(920)  GPS+SD+Flash+USB-CDC%s\r\n",
            GS_USB_SELFTEST ? "  [USB SELFTEST]" : "");
+    printf("[LED] PE2 心跳(存活) / PE3 GPS定位 / PE4 接收活動\r\n");
 
     TelemRx_Init(&s_rx433);
     TelemRx_Init(&s_rx920);
@@ -273,6 +307,9 @@ void GroundStation_Run(void)
 
         /* UART2 命令處理（地面站通訊測試） */
         GsLoraTest_Tick();
+
+        /* 指示燈：心跳 / GPS fix / 接收活動 */
+        gs_leds_update(HAL_GetTick(), g->fix_valid);
 
         HAL_IWDG_Refresh(&hiwdg);
         osDelay(GS_POLL_DELAY_MS);
