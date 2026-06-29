@@ -37,10 +37,10 @@
 /* ============================================================
  *  ★ RF 組態（上板 bring-up 須對照 E80-900M2213S 規格書與地面站逐項驗證）
  * ============================================================ */
-#define E80_RF_FREQ_HZ        920000000UL /* 載波頻率 (Hz)，須符地面站與當地法規 */
+#define E80_RF_FREQ_HZ        920000000UL /* 載波頻率 (Hz)，回復為 920MHz 以匹配 E80 天線與硬體帶通濾波器 */
 #define E80_TX_POWER_DBM      22          /* 發射功率 (dBm)，E80-2213S HP PA 上限 +22 */
 #define E80_LORA_SF           0x09U       /* 展頻因子 SF9（LR1121 值 = SF 數字） */
-#define E80_LORA_BW           0x04U       /* 頻寬 125kHz（0x04） */
+#define E80_LORA_BW           0x05U       /* 頻寬 250kHz（0x05）加大頻寬提升資料率 */
 #define E80_LORA_CR           0x01U       /* 編碼率 4/5（0x01） */
 #define E80_PREAMBLE_LEN      8U          /* 前導碼符號數 */
 #define E80_LORA_SYNCWORD     0x12U       /* LoRa sync word（單一位元組）：0x12 私有 / 0x34 公有，須與對端一致 */
@@ -82,6 +82,7 @@
 /* Radio */
 #define LR_GET_RXBUF_STATUS   0x0203U
 #define LR_GET_PKT_STATUS     0x0204U
+#define LR_SET_TX_CW          0x0208U
 #define LR_SET_RX             0x0209U
 #define LR_SET_TX             0x020AU
 #define LR_SET_RF_FREQ        0x020BU
@@ -158,6 +159,9 @@ static HAL_StatusTypeDef lr_cmd(uint16_t opcode, const uint8_t *params, uint16_t
     st = HAL_SPI_Transmit(s_hspi, hdr, 2, E80_SPI_TIMEOUT_MS);
     if (st == HAL_OK && n > 0) st = HAL_SPI_Transmit(s_hspi, (uint8_t *)params, n, E80_SPI_TIMEOUT_MS);
     E80_CS_HIGH();
+    if (st == HAL_OK) {
+        st = e80_wait_busy(E80_BUSY_TIMEOUT_MS);
+    }
     SPI3_Bus_Unlock();
     return st;
 }
@@ -334,6 +338,7 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     s_preamble       = E80_PREAMBLE_LEN;
 
     E80_CS_HIGH();
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);  /* 強制拉高 W25Q128 CS，防止 SPI3 匯流排干擾 */
     e80_reset();
     s_init_busy = HAL_GPIO_ReadPin(LORA920_BUSY_GPIO_Port, LORA920_BUSY_Pin);
 
@@ -363,7 +368,11 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     uint8_t ptype = LR_PKT_TYPE_LORA;
     lr_cmd(LR_SET_PKT_TYPE, &ptype, 1);
 
-    /* PA 設定（HP PA, VBAT 供電, dutyCycle=0x04, hpSel=0x07 → +22dBm） */
+    /* PA 設定（HP PA → +22dBm）。
+     * ★ LR1121 datasheet SetPaConfig：HP PA(PaSel=0x01) 的 regPaSupply 必須為
+     *   0x01（VBAT）；用 0x00（內部 LDO）餵 HP PA 規格不支援 → 輸出極弱/近乎無，
+     *   正是「晶片 rdy 但 SDR 收不到」的典型主因。Semtech +22dBm 參考組合：
+     *   PaSel=0x01, regPaSupply=0x01(VBAT), paDutyCycle=0x04, paHpSel=0x07。 */
     uint8_t pa[4] = { 0x01, 0x01, 0x04, 0x07 };
     lr_cmd(LR_SET_PA_CFG, pa, 4);
 
@@ -455,6 +464,7 @@ HAL_StatusTypeDef LoRaE80_Send(const uint8_t *data, uint8_t len)
     s_tx_done = 0;
 
     e80_set_standby_rc();
+    e80_set_rf_switch();   /* 強制切換天線開關至 TX 模式 */
     e80_set_dio_irq(LR_IRQ_TX_DONE | LR_IRQ_TIMEOUT);
     if (e80_set_packet_params(len) != HAL_OK)       return HAL_ERROR;
     e80_clear_irq();
@@ -587,3 +597,39 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         LoRaE80_OnDio1IRQ();
     }
 }
+
+void LoRaE80_PrintConfig(void)
+{
+    printf("[LORA 920MHz] E80-2213S   | Freq: %.3f MHz | Power: +%ddBm | BW: %ukHz | SF: %u | CR: 4/5 | SyncWord: 0x%02X\r\n",
+           (double)E80_RF_FREQ_HZ / 1000000.0,
+           E80_TX_POWER_DBM,
+           (unsigned)lora_bw_to_khz(E80_LORA_BW),
+           (unsigned)E80_LORA_SF,
+           (unsigned)E80_LORA_SYNCWORD);
+}
+
+HAL_StatusTypeDef LoRaE80_StartCW(uint32_t freq_hz)
+{
+    if (s_disabled || s_hspi == NULL) return HAL_ERROR;
+
+    e80_set_standby_rc();
+    e80_set_rf_switch();   /* 強制切換 RF 開關至 TX 模式 */
+
+    uint8_t ptype = LR_PKT_TYPE_LORA;
+    lr_cmd(LR_SET_PKT_TYPE, &ptype, 1);
+
+    uint8_t pa[4] = { 0x01, 0x00, 0x04, 0x07 };
+    lr_cmd(LR_SET_PA_CFG, pa, 4);
+
+    e80_apply_rf(freq_hz, E80_LORA_SF, E80_LORA_BW, E80_LORA_CR, E80_TX_POWER_DBM);
+
+    /* 發送 CW (Continuous Wave) 無調變連續載波 */
+    HAL_StatusTypeDef st = lr_cmd(LR_SET_TX_CW, NULL, 0);
+    if (st == HAL_OK) {
+        printf("[LORA CW] E80 Continuous Wave (CW) started at %.3f MHz (+%ddBm)\r\n",
+               (double)freq_hz / 1000000.0, E80_TX_POWER_DBM);
+    }
+    return st;
+}
+
+
