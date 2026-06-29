@@ -389,10 +389,17 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
     e80_get_irq(&irq0);
     e80_clear_irq();
 
-    uint8_t all_zero = (ver[0] == 0x00 && ver[1] == 0x00 && ver[2] == 0x00 && ver[3] == 0x00);
-    uint8_t all_ff   = (ver[0] == 0xFF && ver[1] == 0xFF && ver[2] == 0xFF && ver[3] == 0xFF);
-    if (s_init_rd_st != (int)HAL_OK || all_zero || all_ff) {
-        /* 模組未偵測到（含 MISO 接地/浮空）→ 從 SPI3 隔離，保護同匯流排的 Flash */
+    /* 在線判定（強化）：
+     *  - GetVersion 全 0x00 / 全 0xFF → MISO 接地/浮空，晶片沒回應
+     *  - GetStatus 的 Stat1（gs）為 0x00 / 0xFF → 同樣是 MISO 沒被晶片驅動
+     *  - GetVersion 的 Type 必須為 0x03（LR1121 簽章；0x02=LR1120, 0x01=LR1110）
+     * 任一不符即視為未偵測到 → 隔離 SPI3、回 HAL_ERROR（誠實回報，不謊報 rdy）。
+     * 真正在線的 LR1121：Type=0x03、Stat1 為有效模式位元，皆會通過。 */
+    uint8_t all_zero  = (ver[0] == 0x00 && ver[1] == 0x00 && ver[2] == 0x00 && ver[3] == 0x00);
+    uint8_t all_ff    = (ver[0] == 0xFF && ver[1] == 0xFF && ver[2] == 0xFF && ver[3] == 0xFF);
+    uint8_t gs_dead   = (s_get_status_byte == 0x00 || s_get_status_byte == 0xFF);
+    uint8_t bad_type  = (ver[1] != 0x03);   /* Type 非 LR1121 */
+    if (s_init_rd_st != (int)HAL_OK || all_zero || all_ff || gs_dead || bad_type) {
         LoRaE80_Shutdown();
         return HAL_ERROR;
     }
