@@ -45,7 +45,9 @@
 #define E80_PREAMBLE_LEN      8U          /* 前導碼符號數 */
 #define E80_LORA_SYNCWORD     0x12U       /* LoRa sync word（單一位元組）：0x12 私有 / 0x34 公有，須與對端一致 */
 
-#define E80_USE_TCXO          0           /* 0=用自供電 XTA 主動振盪器（E80 預設）；1=LR1121 供電 TCXO（須重校準） */
+#define E80_USE_TCXO          0           /* 0=自供電 XTA 振盪器（E80 屬此）；1=LR1121 供電 TCXO。
+                                             ★實測：設 1 反而讓晶片在 SPI 上完全不回應(gs 0x98→0x00)，
+                                             證實 E80 為自供電振盪器、非 LR1121-TCXO，故保持 0。 */
 #define E80_TCXO_VOLTAGE      0x07U       /* TCXO 電壓：0x07=3.3V（依模組，僅 E80_USE_TCXO=1 生效） */
 #define E80_TCXO_DELAY        0x000140UL  /* TCXO 啟動延遲（×30.52us，0x140=320≈9.8ms） */
 #define E80_USE_DCDC          0           /* 0=LDO（保守）；1=DC-DC（須外部電感，E80 多含） */
