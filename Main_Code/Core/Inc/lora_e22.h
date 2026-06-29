@@ -38,10 +38,12 @@ extern "C" {
 #endif
 
 /**
- * @brief 綁定 UART 並將模組設為透傳模式（M0=M1=0）+ 硬體重置，等 AUX 拉高。
- *        於 main() 初始化區呼叫；失敗時可由低優先任務週期性重試（P1）。
+ * @brief 綁定 UART、設透傳模式（M0=M1=0）+ 硬體重置，並以「設定模式回讀 CH 暫存器」
+ *        偵測模組是否真的在線（透傳模式無握手；AUX 為 PULLUP 無法判在線，故用回讀）。
+ *        於 main() 初始化區呼叫；偵測失敗時可由低優先任務週期性重試（P1）。
  * @param huart E22 所掛的 UART（本專案為 &huart3）。
- * @return HAL_OK = AUX 已就緒；HAL_TIMEOUT = 模組未回應（呼叫端標記 lora433_ok=0）。
+ * @return HAL_OK = 模組有回應（在線）；HAL_TIMEOUT = 無回應（未接 / 接線錯 / 故障）。
+ *         注意：不論回傳值，鏈路皆標記為可用（s_inited=1）；回傳值僅供誠實回報 / 重試判斷。
  */
 HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart);
 

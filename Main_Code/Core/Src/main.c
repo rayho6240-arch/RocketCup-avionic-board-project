@@ -379,9 +379,9 @@ int main(void)
       HAL_Delay(50);
   }
   if (lora433_ok) {
-      printf("[LORA433] E22 transparent mode ready (UART3).\r\n");
+      printf("[LORA433] E22 偵測成功（config 回讀 OK），透傳就緒 (UART3)。\r\n");
   } else {
-      printf("[LORA] E22 433MHz AUX 逾時（模組未回應），遙測任務將週期性重試。\r\n");
+      printf("[LORA433] ⚠ E22 未偵測到（config 無回應）—— 確認模組/接線/供電；主航電遙測任務每 10s 重試。\r\n");
   }
 #if FEATURE_UPLINK_DEPLOY
   /* 主航電：在下行之外開啟 USART3 上行接收（地面站手動開傘命令）。

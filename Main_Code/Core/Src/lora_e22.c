@@ -78,6 +78,36 @@ static HAL_StatusTypeDef e22_write_channel(uint8_t ch)
     return ret;
 }
 
+/* 模組在線偵測：透傳模式無握手，故進設定模式回讀 CH(0x05) 暫存器。
+ * 在線 → 回 `C1 05 01 <CH>`；未接/接線錯/故障 → UART 無回應。回傳 1=在線, 0=無回應。
+ * AUX(PE11) 為 PULLUP，未接模組也讀 HIGH，無法判在線，故不能靠 AUX —— 改用此回讀。 */
+static uint8_t e22_probe(void)
+{
+    if (s_huart == NULL) return 0;
+
+    HAL_GPIO_WritePin(LORA433_M1_GPIO_Port, LORA433_M1_Pin, GPIO_PIN_SET);  /* 進設定模式 */
+    HAL_Delay(20);
+    (void)e22_wait_aux_high(100);
+
+    s_huart->Init.BaudRate = 9600;     /* 設定模式固定 9600 */
+    HAL_UART_Init(s_huart);
+
+    uint8_t present = 0;
+    for (int attempt = 0; attempt < 2 && !present; attempt++) {
+        uint8_t rd[3] = {0xC1, 0x05, 0x01};         /* 讀 CH 暫存器 */
+        uint8_t resp[4] = {0, 0, 0, 0};
+        HAL_UART_Transmit(s_huart, rd, sizeof(rd), 50);
+        HAL_UART_Receive(s_huart, resp, sizeof(resp), 200);
+        if (resp[0] == 0xC1 && resp[1] == 0x05) present = 1;   /* 有效回應前綴 */
+    }
+
+    s_huart->Init.BaudRate = 115200;   /* 還原透傳 baud */
+    HAL_UART_Init(s_huart);
+    HAL_GPIO_WritePin(LORA433_M1_GPIO_Port, LORA433_M1_Pin, GPIO_PIN_RESET);  /* 回透傳模式 */
+    HAL_Delay(20);
+    return present;
+}
+
 HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart)
 {
     s_huart = huart;
@@ -92,8 +122,10 @@ HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart)
     HAL_GPIO_WritePin(LORA433_RST_GPIO_Port, LORA433_RST_Pin, GPIO_PIN_SET);
     HAL_Delay(20);
 
-    s_inited = 1;
-    return HAL_OK;
+    s_inited = 1;   /* 鏈路恆標記可用（透傳模式發送靠 AUX 背壓）；偵測結果另由回傳值表示 */
+
+    /* 設定模式回讀偵測模組是否真的在線（誠實回報；呼叫端據此印訊息 / 主航電每 10s 重試）。 */
+    return e22_probe() ? HAL_OK : HAL_TIMEOUT;
 }
 
 uint8_t LoRaE22_IsReady(void)

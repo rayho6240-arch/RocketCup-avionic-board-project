@@ -22,7 +22,6 @@
 #include <ctype.h>
 
 extern UART_HandleTypeDef huart2;
-extern UART_HandleTypeDef huart3;   /* E22 433 透傳（上行命令發送用） */
 extern SPI_HandleTypeDef  hspi3;    /* E80 重新初始化用 */
 extern IWDG_HandleTypeDef hiwdg;    /* 上行 burst 期間餵狗 */
 
@@ -363,9 +362,8 @@ static void dispatch_cmd(char *line)
 void GsLoraTest_Init(void)
 {
     stats_reset_all();
-    /* 地面站 E22 預設只收；初始化驅動（透傳模式 M0=M1=0 + reset）使其也能發上行命令。
-     * 須在 GroundStation_Run 掛載 USART3 ReceiveToIdle 之前呼叫（本函式即在其前）。 */
-    LoRaE22_Init(&huart3);
+    /* E22 已於 main() 初始化區（IS_GROUND 分支）init 完成（s_inited=1），故此處不重複
+     * init —— 上行命令直接用 LoRaE22_Send 即可（透傳模式 TX/RX 皆已就緒）。 */
     HAL_UARTEx_ReceiveToIdle_IT(&huart2, s_u2_rxbuf, sizeof(s_u2_rxbuf));
     printf("[TEST] LoRa 通訊測試模組就緒（UART2 460800），輸入 help\r\n");
 }
