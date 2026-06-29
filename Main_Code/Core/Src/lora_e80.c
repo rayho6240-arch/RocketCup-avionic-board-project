@@ -52,14 +52,20 @@
 #define E80_TCXO_DELAY        0x000140UL  /* TCXO 啟動延遲（×30.52us，0x140=320≈9.8ms） */
 #define E80_USE_DCDC          0           /* 0=LDO（保守）；1=DC-DC（須外部電感，E80 多含） */
 
-/* ---- RF 開關真值表（★板級：DIO5=RFSW0(bit0), DIO6=RFSW1(bit1)；採 Semtech 參考設計） ----
- * enable: 哪些 DIO 充當 RF 開關；其餘為各模式下各 RFSW 線的高低電平組合。 */
-#define E80_RFSW_ENABLE       0x03U       /* RFSW0(DIO5)+RFSW1(DIO6) 皆作 RF 開關 */
-#define E80_RFSW_STBY         0x00U       /* 待機：全低 */
-#define E80_RFSW_RX           0x01U       /* 接收：RFSW0 高（地面站主用） */
-#define E80_RFSW_TX           0x03U       /* 一般 TX（LP，少用） */
-#define E80_RFSW_TX_HP        0x02U       /* 高功率 TX（22dBm，主航電下行主用）：RFSW1 高 */
-#define E80_RFSW_TX_HF        0x00U       /* 2.4GHz（本專案不用） */
+/* ---- RF 開關真值表 ★依 Ebyte E80-xxxM2213S 使用手冊 v1.1 第 5 頁（DIO5/RFSW0=bit0, DIO6/RFSW1=bit1）----
+ * ⚠ 手冊注3 明示：E80 的開關控制狀態「與 SEMTECH 官方 SDK 預設不同」（原驅動誤用 Semtech 預設值）：
+ *     DIO5 DIO6  狀態
+ *      0    0    RX
+ *      0    1    TX Sub-GHz 低功率 (LP)
+ *      1    0    TX Sub-GHz 高功率 (HP) ← 主航電下行主用
+ *      1    1    TX 2.4GHz
+ * enable: 哪些 DIO 充當 RF 開關；其餘為各模式下 DIO5/DIO6 的高低電平組合。 */
+#define E80_RFSW_ENABLE       0x03U       /* DIO5+DIO6 皆作 RF 開關 */
+#define E80_RFSW_STBY         0x00U       /* 待機：全低（= RX 路徑，安全） */
+#define E80_RFSW_RX           0x00U       /* 接收：DIO5=0,DIO6=0（地面站主用） */
+#define E80_RFSW_TX           0x02U       /* TX 低功率 LP：DIO5=0,DIO6=1 */
+#define E80_RFSW_TX_HP        0x01U       /* TX 高功率 HP（+22dBm，下行主用）：DIO5=1,DIO6=0 */
+#define E80_RFSW_TX_HF        0x03U       /* TX 2.4GHz：DIO5=1,DIO6=1（本專案不用） */
 #define E80_RFSW_GNSS         0x00U
 #define E80_RFSW_WIFI         0x00U
 
