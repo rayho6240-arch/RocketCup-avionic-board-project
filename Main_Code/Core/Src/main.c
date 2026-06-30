@@ -55,7 +55,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+/* 920 連續載波(CW)測試：僅供 SDR 抓訊號用。⚠ 設 1 會讓 LR1121 HP PA 「持續滿功率
+ * 發射」→ 大量持續電流（易壓垮供電造成欠壓重啟）且無法正常封包下行。正常運作必須為 0：
+ * 開機只 init E80，由 LoRaTelemetry_Task 每包 SetTx 脈衝發送。 */
+#ifndef E80_CW_TEST
+#define E80_CW_TEST 0
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -296,9 +301,13 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  HAL_Delay(500);   /* 延遲 500ms 讓 USB-TTL 串口驅動在 MCU 重置後有時間穩定，防止 PC 端漏字 */
+  printf("\r\n============================================================\r\n");
+  printf("[VERSION] Firmware Version: %s\r\n", FIRMWARE_VERSION);
+  printf("============================================================\r\n");
   /* 開機印出重置原因：POR/BOR=電源/欠壓(拔 UART 掉電/LoRa 發射突波最常見)；
    * IWDG=看門狗逾時(任務卡住)；SOFT=軟體重置；PIN=外部復位腳。 */
-  printf("\r\n[RESET] %s%s%s%s%s%s%s(CSR=0x%08lX)\r\n",
+  printf("[RESET] %s%s%s%s%s%s%s(CSR=0x%08lX)\r\n",
          (reset_csr & RCC_CSR_BORRSTF)  ? "BOR(欠壓) "          : "",
          (reset_csr & RCC_CSR_PORRSTF)  ? "POR/PDR(上電/欠壓) " : "",
          (reset_csr & RCC_CSR_IWDGRSTF) ? "IWDG(看門狗) "       : "",
@@ -307,6 +316,7 @@ int main(void)
          (reset_csr & RCC_CSR_LPWRRSTF) ? "LPWR "               : "",
          (reset_csr & RCC_CSR_PINRSTF)  ? "PIN(外部腳) "        : "",
          (unsigned long)reset_csr);
+  fflush(stdout);
 #if FEATURE_USB_CDC
   MX_USB_DEVICE_Init();   /* 地面站：USB 虛擬序列埠 (CDC)。飛行版不啟用（不列舉、不佔 CPU）。 */
 #endif
@@ -436,8 +446,12 @@ int main(void)
       HAL_Delay(50);
   }
   if (lora920_ok) {
-      printf("[LORA920] E80 online (SX126x SPI3).\r\n");
-      LoRaE80_StartCW(920000000UL);  /* 啟動 CW 無調變連續載波測試 (920MHz)，供 SDR 抓取訊號 */
+      printf("[LORA920] E80 online (LR1121 SPI3).\r\n");
+#if E80_CW_TEST
+      /* ⚠ 測試專用：連續載波（持續滿功率發射，會壓垮供電 + 無正常下行）。正常請維持 E80_CW_TEST=0。 */
+      LoRaE80_StartCW(920000000UL);
+#endif
+      /* 正常：不發 CW，E80 留在 standby，由 LoRaTelemetry_Task 每包脈衝 SetTx 發送下行。 */
   } else {
       LoRaE80_Shutdown();   /* 偵測失敗（含 MISO 接地/浮空）→ RST 拉低隔離，釋放 SPI3 */
       printf("[LORA920] E80 NOT detected — held in reset to free SPI3 (protect Flash).\r\n");
