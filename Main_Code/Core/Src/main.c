@@ -443,7 +443,7 @@ int main(void)
   }
   if (lora920_ok) {
       /* Init 已完成全部 RF 設定（standby_rc → RF 開關 → LoRa 封包型態 → HP PA/VBAT →
-       * 922MHz/SF9/BW250/CR4-5/+22dBm → 封包參數 → sync word → TxDone IRQ）。
+       * 920MHz/SF9/BW250/CR4-5/+22dBm → 封包參數 → sync word → TxDone IRQ）。
        * 不再啟動連續載波(CW)；E80 留在 standby，由 LoRaTelemetry_Task 每包脈衝 SetTx 發送下行。 */
       printf("[LORA920] E80 online (LR1121 SPI3) — standby，下行由遙測任務每包脈衝發送。\r\n");
   } else {
