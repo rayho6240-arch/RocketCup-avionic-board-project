@@ -258,7 +258,9 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* 擷取上一次重置原因（診斷「拔掉 UART 就一直重啟」）。RCC CSR 旗標跨重置保留至清除。 */
+  uint32_t reset_csr = RCC->CSR;
+  __HAL_RCC_CLEAR_RESET_FLAGS();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -294,6 +296,17 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  /* 開機印出重置原因：POR/BOR=電源/欠壓(拔 UART 掉電/LoRa 發射突波最常見)；
+   * IWDG=看門狗逾時(任務卡住)；SOFT=軟體重置；PIN=外部復位腳。 */
+  printf("\r\n[RESET] %s%s%s%s%s%s%s(CSR=0x%08lX)\r\n",
+         (reset_csr & RCC_CSR_BORRSTF)  ? "BOR(欠壓) "          : "",
+         (reset_csr & RCC_CSR_PORRSTF)  ? "POR/PDR(上電/欠壓) " : "",
+         (reset_csr & RCC_CSR_IWDGRSTF) ? "IWDG(看門狗) "       : "",
+         (reset_csr & RCC_CSR_WWDGRSTF) ? "WWDG "               : "",
+         (reset_csr & RCC_CSR_SFTRSTF)  ? "SOFT(軟體) "         : "",
+         (reset_csr & RCC_CSR_LPWRRSTF) ? "LPWR "               : "",
+         (reset_csr & RCC_CSR_PINRSTF)  ? "PIN(外部腳) "        : "",
+         (unsigned long)reset_csr);
 #if FEATURE_USB_CDC
   MX_USB_DEVICE_Init();   /* 地面站：USB 虛擬序列埠 (CDC)。飛行版不啟用（不列舉、不佔 CPU）。 */
 #endif
