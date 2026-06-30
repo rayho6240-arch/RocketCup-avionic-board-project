@@ -44,6 +44,9 @@ Thumbs.db
 # Jupyter Notebook 快取
 .ipynb_checkpoints/
 
+# --- AI 代理 session 產物（多代理協作暫存目錄，勿入版控） ---
+.agents/
+
 # --- Python 虛擬環境與快取 ---
 __pycache__/
 *.pyc
@@ -80,11 +83,12 @@ checklist.html
 # --- BOM 產出目錄 ---
 bom/
 
-# --- host 單元測試編譯產物（tests/Makefile BINS） ---
-tests/test_sensor_axis
-tests/test_fsm
-tests/test_ekf_guard
-tests/test_sensor_health
-tests/test_telemetry
-tests/test_gps
-tests/test_flash_ring
+# --- host 單元測試編譯產物（tests/Makefile BINS；萬用字元涵蓋現有與未來測試） ---
+# 忽略所有 tests/test_* 執行檔，但保留同名 .c / .h 原始碼。
+tests/test_*
+!tests/test_*.c
+!tests/test_*.h
+
+# Makefile 自動產生的版本標頭（每次建置更新，不納版控）
+Main_Code/Core/Inc/build_version.h
+Main_Code/Core/Inc/board_config.h.rolebak

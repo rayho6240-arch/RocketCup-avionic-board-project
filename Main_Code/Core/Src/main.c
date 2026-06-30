@@ -43,6 +43,20 @@
 #include "gs_lora_test.h"   /* 地面站 LoRa 通訊測試模組（UART2 命令 + 雙鏈路統計） */
 #include "uplink_cmd.h"     /* 上行手動開傘（FEATURE_UPLINK_DEPLOY 下編入；其餘為空） */
 #include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
+/* 版本資訊：版號為 board_config.h 的 FIRMWARE_VERSION（手動語意化版本）。
+ * Makefile 建置前自動產生 build_version.h，補上 git 版次(FW_GIT) 與建置時間(FW_BUILD)；
+ * 未經 Makefile（如直接用 CubeIDE）建置時該檔不存在 → 退回預設，不影響編譯。 */
+#if defined(__has_include)
+#  if __has_include("build_version.h")
+#    include "build_version.h"
+#  endif
+#endif
+#ifndef FW_GIT
+#define FW_GIT   "nogit"
+#endif
+#ifndef FW_BUILD
+#define FW_BUILD (__DATE__ " " __TIME__)
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -298,9 +312,18 @@ int main(void)
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);   /* 關閉 stdout 緩衝，使所有 FreeRTOS 任務的 printf 立即送往 UART，防慢速任務因獨立 reent 結構積壓不印 */
   HAL_Delay(500);   /* 延遲 500ms 讓 USB-TTL 串口驅動在 MCU 重置後有時間穩定，防止 PC 端漏字 */
-  printf("\r\n============================================================\r\n");
-  printf("[VERSION] Firmware Version: %s\r\n", FIRMWARE_VERSION);
-  printf("============================================================\r\n");
+  /* 開機橫幅：版本 + 角色，重複三次（剛接上序列埠/雜訊環境也至少看得到一次）。 */
+  {
+      const char *role_str =
+          IS_GROUND  ? "GROUND(地面站)" :
+          IS_BACKUP  ? "BACKUP(備援)"   : "PRIMARY(主航電)";
+      for (int v = 0; v < 3; v++) {
+          printf("============================================================\r\n");
+          printf("[BOOT] RocketCom FW=%s  ROLE=%s  (git=%s build=%s)\r\n",
+                 FIRMWARE_VERSION, role_str, FW_GIT, FW_BUILD);
+      }
+      printf("============================================================\r\n");
+  }
   /* 開機印出重置原因：POR/BOR=電源/欠壓(拔 UART 掉電/LoRa 發射突波最常見)；
    * IWDG=看門狗逾時(任務卡住)；SOFT=軟體重置；PIN=外部復位腳。 */
   printf("[RESET] %s%s%s%s%s%s%s(CSR=0x%08lX)\r\n",
@@ -1852,7 +1875,7 @@ uint16_t ADC_Read_Battery_mv(void) {
         val = HAL_ADC_GetValue(&hadc1);
     }
     HAL_ADC_Stop(&hadc1);
-    return (uint16_t)((val * 3300UL * 11UL) / 4095UL);
+    return (uint16_t)((val * 3300UL * 3UL) / 4095UL);
 }
 
 /* ===== SPI3 共用匯流排互斥鎖包裝（W25Q128 Flash + E80 920MHz LoRa，見 spi3_bus.h） =====
@@ -2166,20 +2189,20 @@ void StartDefaultTask(void *argument)
   /* 初始化採樣率監測器（Watch 視窗加入 g_sampling_rate 即可一次觀察全部 Hz） */
   SAMPLING_RATE_INIT();
 
-  /* === Buzzer 開機提示：兩聲漸高 (2kHz → 4kHz) === */
-  /* 聲1：2kHz，100ms */
+  /* === RTOS 啟動提示音已停用，統一使用 main() 中的硬體開機提示音 === */
+  /*
   htim2.Instance->ARR  = 499;
   htim2.Instance->CCR1 = 250;
   htim2.Instance->EGR  = TIM_EGR_UG;
   osDelay(100);
   htim2.Instance->CCR1 = 0;
   osDelay(100);
-  /* 聲2：4kHz，100ms */
   htim2.Instance->ARR  = 249;
   htim2.Instance->CCR1 = 125;
   htim2.Instance->EGR  = TIM_EGR_UG;
   osDelay(100);
   htim2.Instance->CCR1 = 0;
+  */
 
   /* === SD 卡初始化與 10 秒日誌啟動 === */
   extern FATFS SDFatFS;
