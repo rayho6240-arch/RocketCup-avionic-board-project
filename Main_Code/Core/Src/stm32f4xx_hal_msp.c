@@ -923,7 +923,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     */
     GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;   /* RX(PA3) 上拉：拔掉 UART 轉接頭時不浮動 → 不產生雜訊位元組
+                                             （原 NOPULL 懸空會灌入雜訊，使輪詢/錯誤旗標卡住）。TX(PA3 AF-PP) 不受影響。 */
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);

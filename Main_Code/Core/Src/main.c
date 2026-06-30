@@ -462,19 +462,30 @@ int main(void)
   HAL_IWDG_Refresh(&hiwdg);
 #endif
 
-  /* Buzzer：啟動 TIM2 CH1 PWM，並立即播放開機提示音 (2kHz → 4kHz) */
+  /* Buzzer 開機提示音：依角色不同節奏，耳朵即可確認「燒對角色」（呼應 board_config 角色易混）。
+   * TIM2 時基 1MHz → 頻率 = 1e6/(ARR+1)。所有角色都會響（TIM2 與此段皆無條件執行）。 */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  htim2.Instance->ARR  = 499;
-  htim2.Instance->CCR1 = 250;
-  htim2.Instance->EGR  = TIM_EGR_UG;
+#if IS_GROUND
+  for (int b = 0; b < 3; b++) {                 /* 地面站：三短聲 3kHz */
+      htim2.Instance->ARR = 332; htim2.Instance->CCR1 = 166; htim2.Instance->EGR = TIM_EGR_UG;
+      HAL_Delay(90);
+      htim2.Instance->CCR1 = 0;
+      HAL_Delay(90);
+  }
+#elif IS_BACKUP
+  htim2.Instance->ARR = 499; htim2.Instance->CCR1 = 250; htim2.Instance->EGR = TIM_EGR_UG;  /* 備援：一長聲 2kHz */
+  HAL_Delay(500);
+  htim2.Instance->CCR1 = 0;
+#else                                            /* 主航電：兩聲漸高 2kHz→4kHz */
+  htim2.Instance->ARR = 499; htim2.Instance->CCR1 = 250; htim2.Instance->EGR = TIM_EGR_UG;
   HAL_Delay(100);
   htim2.Instance->CCR1 = 0;
   HAL_Delay(100);
-  htim2.Instance->ARR  = 249;
-  htim2.Instance->CCR1 = 125;
-  htim2.Instance->EGR  = TIM_EGR_UG;
+  htim2.Instance->ARR = 249; htim2.Instance->CCR1 = 125; htim2.Instance->EGR = TIM_EGR_UG;
   HAL_Delay(100);
   htim2.Instance->CCR1 = 0;
+#endif
+  HAL_IWDG_Refresh(&hiwdg);   /* 提示音占用 ~0.4–0.5s，補餵一次防 IWDG */
 
 #if FEATURE_LINK
   /* 板間鏈路（USART2 全雙工）：重設 baud 為 LINK_BAUD 並啟動循環 DMA/IDLE 接收。
@@ -2080,22 +2091,27 @@ void Parse_Serial_Command(const char* cmd) {
 
 void Poll_Serial_Commands(void) {
     uint8_t rx_byte;
-    // Read all available bytes from USART2 (non-blocking, timeout = 0)
-    while (HAL_UART_Receive(&huart2, &rx_byte, 1, 0) == HAL_OK) {
+    /* 每次最多處理 CMD_BUFFER_SIZE 個 byte（上限保護）：UART 轉接頭拔掉時 RX 即使有殘餘
+     * 雜訊，也不會在此 while 無限狂讀、霸佔 CPU 而餓死餵狗任務（PA3 已改上拉為主要防線，
+     * 此為第二道防線）。 */
+    for (int guard = 0; guard < CMD_BUFFER_SIZE; guard++) {
+        if (HAL_UART_Receive(&huart2, &rx_byte, 1, 0) != HAL_OK) break;
         if (rx_byte == '\n' || rx_byte == '\r') {
             if (g_cmd_idx > 0) {
                 g_cmd_buf[g_cmd_idx] = '\0';
                 Parse_Serial_Command(g_cmd_buf);
                 g_cmd_idx = 0;
             }
+        } else if (g_cmd_idx < CMD_BUFFER_SIZE - 1) {
+            g_cmd_buf[g_cmd_idx++] = (char)rx_byte;
         } else {
-            if (g_cmd_idx < CMD_BUFFER_SIZE - 1) {
-                g_cmd_buf[g_cmd_idx++] = (char)rx_byte;
-            } else {
-                g_cmd_idx = 0; // overflow reset
-            }
+            g_cmd_idx = 0; // overflow reset
         }
     }
+    /* 清 USART2 浮動/雜訊造成的 ORE/FE/NE/PE（讀 SR 後讀 DR），避免錯誤旗標卡住接收 */
+    __HAL_UART_CLEAR_OREFLAG(&huart2);
+    (void)huart2.Instance->SR;
+    (void)huart2.Instance->DR;
 }
 
 /* USER CODE END 4 */
