@@ -614,28 +614,4 @@ void LoRaE80_PrintConfig(void)
            (unsigned)E80_LORA_SYNCWORD);
 }
 
-HAL_StatusTypeDef LoRaE80_StartCW(uint32_t freq_hz)
-{
-    if (s_disabled || s_hspi == NULL) return HAL_ERROR;
-
-    e80_set_standby_rc();
-    e80_set_rf_switch();   /* 強制切換 RF 開關至 TX 模式 */
-
-    uint8_t ptype = LR_PKT_TYPE_LORA;
-    lr_cmd(LR_SET_PKT_TYPE, &ptype, 1);
-
-    uint8_t pa[4] = { 0x01, 0x00, 0x04, 0x07 };
-    lr_cmd(LR_SET_PA_CFG, pa, 4);
-
-    e80_apply_rf(freq_hz, E80_LORA_SF, E80_LORA_BW, E80_LORA_CR, E80_TX_POWER_DBM);
-
-    /* 發送 CW (Continuous Wave) 無調變連續載波 */
-    HAL_StatusTypeDef st = lr_cmd(LR_SET_TX_CW, NULL, 0);
-    if (st == HAL_OK) {
-        printf("[LORA CW] E80 Continuous Wave (CW) started at %.3f MHz (+%ddBm)\r\n",
-               (double)freq_hz / 1000000.0, E80_TX_POWER_DBM);
-    }
-    return st;
-}
-
 

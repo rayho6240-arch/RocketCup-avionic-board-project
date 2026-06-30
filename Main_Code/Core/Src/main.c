@@ -55,12 +55,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* 920 連續載波(CW)測試：僅供 SDR 抓訊號用。⚠ 設 1 會讓 LR1121 HP PA 「持續滿功率
- * 發射」→ 大量持續電流（易壓垮供電造成欠壓重啟）且無法正常封包下行。正常運作必須為 0：
- * 開機只 init E80，由 LoRaTelemetry_Task 每包 SetTx 脈衝發送。 */
-#ifndef E80_CW_TEST
-#define E80_CW_TEST 0
-#endif
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -301,6 +296,7 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  setvbuf(stdout, NULL, _IONBF, 0);   /* 關閉 stdout 緩衝，使所有 FreeRTOS 任務的 printf 立即送往 UART，防慢速任務因獨立 reent 結構積壓不印 */
   HAL_Delay(500);   /* 延遲 500ms 讓 USB-TTL 串口驅動在 MCU 重置後有時間穩定，防止 PC 端漏字 */
   printf("\r\n============================================================\r\n");
   printf("[VERSION] Firmware Version: %s\r\n", FIRMWARE_VERSION);
@@ -446,12 +442,10 @@ int main(void)
       HAL_Delay(50);
   }
   if (lora920_ok) {
-      printf("[LORA920] E80 online (LR1121 SPI3).\r\n");
-#if E80_CW_TEST
-      /* ⚠ 測試專用：連續載波（持續滿功率發射，會壓垮供電 + 無正常下行）。正常請維持 E80_CW_TEST=0。 */
-      LoRaE80_StartCW(920000000UL);
-#endif
-      /* 正常：不發 CW，E80 留在 standby，由 LoRaTelemetry_Task 每包脈衝 SetTx 發送下行。 */
+      /* Init 已完成全部 RF 設定（standby_rc → RF 開關 → LoRa 封包型態 → HP PA/VBAT →
+       * 922MHz/SF9/BW250/CR4-5/+22dBm → 封包參數 → sync word → TxDone IRQ）。
+       * 不再啟動連續載波(CW)；E80 留在 standby，由 LoRaTelemetry_Task 每包脈衝 SetTx 發送下行。 */
+      printf("[LORA920] E80 online (LR1121 SPI3) — standby，下行由遙測任務每包脈衝發送。\r\n");
   } else {
       LoRaE80_Shutdown();   /* 偵測失敗（含 MISO 接地/浮空）→ RST 拉低隔離，釋放 SPI3 */
       printf("[LORA920] E80 NOT detected — held in reset to free SPI3 (protect Flash).\r\n");

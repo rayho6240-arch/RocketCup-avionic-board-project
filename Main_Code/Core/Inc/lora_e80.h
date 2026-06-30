@@ -59,6 +59,9 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi);
  */
 void LoRaE80_Shutdown(void);
 
+/** @brief 列印 E80 目前設定之 RF 參數 (頻率、功率、頻寬、SF 等) */
+void LoRaE80_PrintConfig(void);
+
 /**
  * @brief 非阻塞發送一筆 LoRa 封包。
  *        若上一筆 TX 尚未完成（DIO1 TxDone 未到且未逾時）則跳過本次回傳 HAL_BUSY，
