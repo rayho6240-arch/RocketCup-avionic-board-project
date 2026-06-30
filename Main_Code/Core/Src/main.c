@@ -424,6 +424,7 @@ int main(void)
   }
   if (lora920_ok) {
       printf("[LORA920] E80 online (SX126x SPI3).\r\n");
+      LoRaE80_StartCW(920000000UL);  /* 啟動 CW 無調變連續載波測試 (920MHz)，供 SDR 抓取訊號 */
   } else {
       LoRaE80_Shutdown();   /* 偵測失敗（含 MISO 接地/浮空）→ RST 拉低隔離，釋放 SPI3 */
       printf("[LORA920] E80 NOT detected — held in reset to free SPI3 (protect Flash).\r\n");
@@ -448,8 +449,19 @@ int main(void)
   HAL_IWDG_Refresh(&hiwdg);
 #endif
 
-  /* Buzzer：啟動 TIM2 CH1 PWM，初始靜音 (CCR1=0) */
+  /* Buzzer：啟動 TIM2 CH1 PWM，並立即播放開機提示音 (2kHz → 4kHz) */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  htim2.Instance->ARR  = 499;
+  htim2.Instance->CCR1 = 250;
+  htim2.Instance->EGR  = TIM_EGR_UG;
+  HAL_Delay(100);
+  htim2.Instance->CCR1 = 0;
+  HAL_Delay(100);
+  htim2.Instance->ARR  = 249;
+  htim2.Instance->CCR1 = 125;
+  htim2.Instance->EGR  = TIM_EGR_UG;
+  HAL_Delay(100);
+  htim2.Instance->CCR1 = 0;
 
 #if FEATURE_LINK
   /* 板間鏈路（USART2 全雙工）：重設 baud 為 LINK_BAUD 並啟動循環 DMA/IDLE 接收。
@@ -496,7 +508,7 @@ int main(void)
 #if FEATURE_FLIGHT
   g_ekf_task_handle = osThreadNew(EKF_Task, NULL, &EKF_Task_attributes);
 #endif
-#ifdef ENABLE_DIAGNOSTICS
+#if defined(ENABLE_DIAGNOSTICS) && !IS_GROUND
   static const osThreadAttr_t diagnosticTask_attributes = {
     .name = "diagTask",
     .stack_size = 512 * 4,
@@ -1863,21 +1875,45 @@ void LoRaTelemetry_Task(void *argument)
         }
 #endif
 
+        HAL_StatusTypeDef st433 = HAL_BUSY;
+        uint8_t tried433 = 0;
 #if FEATURE_UPLINK_DEPLOY
         /* 上行接收窗：每 UPLINK_LISTEN_EVERY 槽空出 1 槽不發 433（E22 透傳此時即在接收），
          * 讓地面站的上行命令有空中無干擾時段可被收到。920 下行不受影響、維持全速率。 */
         uint8_t listen_slot = ((slot % UPLINK_LISTEN_EVERY) == (UPLINK_LISTEN_EVERY - 1U));
         if (lora433_ok && !listen_slot) {
-            LoRaE22_Send(tx_buf, len);
+            st433 = LoRaE22_Send(tx_buf, len);
+            tried433 = 1;
         }
         UplinkCmd_Poll(HAL_GetTick());            /* 解析上行、處理 ARM/DEPLOY、ARM 逾時 */
 #else
         if (lora433_ok) {
-            LoRaE22_Send(tx_buf, len);            /* 忙線(AUX low)回 HAL_BUSY，本次跳過 */
+            st433 = LoRaE22_Send(tx_buf, len);    /* 透傳：HAL_OK=已推入 UART→E22 */
+            tried433 = 1;
         }
 #endif
+        /* 433 下行發送狀態 log（確認 MCU 確實把封包推給 E22 + AUX 腳狀態）。
+         * AUX：HIGH=E22 空閒可收發；持續 LOW=E22 忙/異常。每 25 槽(~5s)印一次。 */
+        {
+            static uint32_t s_433_try = 0, s_433_ok = 0;
+            if (tried433) { s_433_try++; if (st433 == HAL_OK) s_433_ok++; }
+            if (slot % 25U == 0U) {
+                printf("[LORA_TX_LOG] 433MHz tx ok=%lu/try=%lu len=%u AUX=%d last=%s\r\n",
+                       (unsigned long)s_433_ok, (unsigned long)s_433_try, (unsigned)len,
+                       (int)HAL_GPIO_ReadPin(LORA433_BUSY_GPIO_Port, LORA433_BUSY_Pin),
+                       tried433 ? ((st433 == HAL_OK) ? "OK" : ((st433 == HAL_BUSY) ? "BUSY" : "ERR"))
+                                : "skip(listen/off)");
+            }
+        }
         if (lora920_ok) {
-            LoRaE80_Send(tx_buf, (uint8_t)len);   /* 非阻塞；前次 TX 未完成則跳過 */
+            HAL_StatusTypeDef st920 = LoRaE80_Send(tx_buf, (uint8_t)len);
+            static uint32_t s_920_tx_cnt = 0;
+            if (st920 == HAL_OK) s_920_tx_cnt++;
+            if (slot % 25 == 0) {
+                printf("[LORA_TX_LOG] 920MHz Sent Pkts: %lu (Last Status: %s)\r\n",
+                       (unsigned long)s_920_tx_cnt,
+                       (st920 == HAL_OK) ? "OK" : ((st920 == HAL_BUSY) ? "BUSY" : "ERR"));
+            }
         }
 
         slot++;
@@ -1886,7 +1922,7 @@ void LoRaTelemetry_Task(void *argument)
     }
 }
 
-#ifdef ENABLE_DIAGNOSTICS
+#if defined(ENABLE_DIAGNOSTICS) && !IS_GROUND
 void Poll_Serial_Commands(void);
 void Parse_Serial_Command(const char* cmd);
 
@@ -2065,6 +2101,12 @@ void StartDefaultTask(void *argument)
   GroundStation_Run();   /* 地面站主迴圈（接收 LoRa 433+920 + GPS → 對齊時間戳 → SD/Flash/USB），不返回 */
 #endif
   uint32_t tick = 0;
+
+  printf("\r\n============================================================\r\n");
+  printf("[ROLE] %s  [LORA RADIO PARAMETERS]\r\n", IS_PRIMARY ? "PRIMARY_AV (主航電)" : "BACKUP_AV (備援航電)");
+  printf("[LORA 433MHz] E22-400T30S | Freq: 432.000 MHz (CH=22) | Baud: 115200 bps\r\n");
+  LoRaE80_PrintConfig();
+  printf("============================================================\r\n\r\n");
 
   /* === LED 開機自檢：全亮 2 秒確認三顆 LED 正常，之後全滅交由主迴圈接管 ===
    * 分 4 × 500ms 餵狗，避免 IWDG 2.05s timeout 在此期間觸發 reset。 */
