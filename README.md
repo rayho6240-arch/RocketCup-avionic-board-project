@@ -27,6 +27,20 @@
 
 ---
 
+## 文件導覽 (韌體 / 教學 / 歷史)
+
+韌體、教學與專案歷史文件已整理歸檔如下：
+
+* **[教學/教學_6_24.md](教學/教學_6_24.md)**：最新完整版開發教學（三角色架構、板間鏈路與不對稱備援、雙鏈路遙測協定、地面站、主機端測試）。
+* **[PROJECT_HISTORY.md](PROJECT_HISTORY.md)**：專案演進史，記錄重大決策與轉折的「為什麼」。
+* **[docs/](docs/README.md)**：工程／規劃文件索引（硬體規格表、改進計劃、進度、設計筆記、需求驗證、測試方法）。
+
+> **韌體建置請以頂層 [`Makefile`](Makefile) 為準**：`make`（主航電）、`make build-backup`（備援）、`make build-ground`（地面站）、`make host-test`（純邏輯測試）。
+> 工具鏈**必須使用 STM32CubeIDE 內建的 arm-none-eabi gcc**（Makefile 會自動偵測），**請勿使用 Homebrew 版**。
+> 注意：航電專案目錄已由 `Main_AV_F407` 更名為 `Main_Code`；本文件下方早期撰寫的「VS Code / Homebrew」段落僅供歷史參考，現行建置一律以頂層 `Makefile` 與 `教學/教學_6_24.md` 第 11 節為準。
+
+---
+
 ## ⚡ 每日開發流程 (SOP)
 
 為了避免「悲劇」（檔案衝突或覆蓋），每次開工前請牢記口訣：**「先拉，再做，後推」**。
@@ -96,33 +110,45 @@ Git 很擅長合併程式碼，但**非常不擅長合併二進位/圖形化的 
 
 ## 🛠️ 輕量化 STM32 開發與編譯指南 (VS Code / Antigravity IDE)
 
-現在，您和組員**完全不需要打開重型的 STM32CubeIDE**，就能在 VS Code / Antigravity IDE 中進行大航電主控專案 [Main_AV_F407](file:///Users/laizhiquan/coding/RocketCom/Main_AV_F407/) 的極速編譯與硬體單步除錯！
+日常編碼、編譯與燒錄**不需要每次打開重型的 STM32CubeIDE**：在 VS Code / Antigravity IDE 的終端機，直接呼叫**倉庫根目錄的頂層 [`Makefile`](Makefile)**，即可完成主控專案 [Main_Code](file:///Users/laizhiquan/coding/RocketCom/Main_Code/) 的極速編譯與燒錄。
 
-### 1️⃣ 安裝本機編譯工具鏈 (Toolchain)
-在您的 Mac 電腦上，我們已為您透過 Homebrew 安裝好了 GNU ARM 交叉編譯器：
+### 1️⃣ 工具鏈 (Toolchain)：用 STM32CubeIDE 內建的，**不要**用 Homebrew
+本專案**必須使用 STM32CubeIDE 內建的 `arm-none-eabi` gcc 與 `STM32_Programmer_CLI`**，**請勿**用 `brew install` 安裝任何 ARM GCC（例如 `gcc-arm-none-eabi`）——版本不同會造成連結或燒錄問題。
+
+* 你**只需要安裝 STM32CubeIDE**（之後不必每次開啟它）；頂層 `Makefile` 第 12–15 行會自動從
+  `…/STM32CubeIDE.app/…/plugins/` 偵測 gcc 與 `STM32_Programmer_CLI` 的路徑，編譯／燒錄時自動帶入 `PATH`。
+* 若出現「STM32CubeIDE 工具鏈未找到」錯誤，代表 CubeIDE 未安裝或路徑不符，請先安裝 STM32CubeIDE。
+
+> 📌 此為現行唯一正確的工具鏈規範，詳見 [`教學/教學_6_24.md`](教學/教學_6_24.md) 第 11 節與頂層 [`Makefile`](Makefile)。
+
+### 2️⃣ 在 IDE 終端機進行極速編譯 (頂層 Makefile)
+**請在倉庫根目錄 `RocketCom/` 下執行**（不要再 `cd` 進子資料夾）。一份程式碼可建置三種角色：
+
 ```bash
-# 安裝 ARM GCC 編譯器 (已經為您下載並安裝好！)
-brew install --cask gcc-arm-none-eabi
+make               # 編譯主航電 (ROLE_PRIMARY，預設目標)
+make build-backup  # 編譯備援航電 (ROLE_BACKUP)
+make build-ground  # 編譯地面站   (ROLE_GROUND)
+make host-test     # 純邏輯主機端測試（免上板）
+make clean         # 清除建置產物
 ```
 
-### 2️⃣ 在 IDE 終端機進行極速編譯 (Makefile 模式)
-在我們的 `Main_AV_F407` 專案下，已配置好了 GCC 編譯環境：
-1. 在本 IDE 中開啟終端機，切換到 `Main_AV_F407` 目錄：
-   ```bash
-   cd Main_AV_F407
-   ```
-2. 執行編譯（使用 4 核心並行編譯，速度極快）：
-   ```bash
-   make -j4
-   ```
-3. 編譯成功後，會在 `Main_AV_F407/Debug/` 目錄下自動產生以下執行與燒錄檔（且已被 `.gitignore` 自動忽略，不佔用倉庫）：
-   - `bigav_407.elf` (用於除錯)
-   - `bigav_407.hex` / `bigav_407.bin` (用於燒錄)
+編譯成功後，產物在 `Main_Code/Debug/` 下（皆已被 `.gitignore` 忽略，不佔倉庫）：
+* **`Main_AV_F407.elf`** — 主航電的除錯／燒錄檔（即頂層 `Makefile` 的 `ELF` 變數）
+* 連帶產生 `Main_AV_F407.bin`、`Main_AV_F407.list`、`Main_AV_F407.map`
+* `Main_AV_F407_backup.elf` / `Main_AV_F407_ground.elf` — 備援／地面站變體（由 `build-backup` / `build-ground` 產生）
 
-### 3️⃣ 一鍵燒錄與實體單步除錯 (Debug)
-推薦在 IDE 中安裝 **Cortex-Debug** 擴充套件，並在專案根目錄 `.vscode/launch.json` 中配置 ST-LINK 除錯器，即可在 IDE 中按下 **F5** 實作 ST-Link 一鍵燒錄與中斷點除錯。
+### 3️⃣ 一鍵燒錄與序列埠監看
+```bash
+make flash          # 編譯 + 以 ST-Link SWD 燒錄主航電 .elf
+make flash-backup   # 編譯並燒錄備援航電
+make flash-ground   # 編譯並燒錄地面站
+make monitor        # 開序列埠監看（自動偵測序列埠 @460800；可用 PORT=/dev/cu.xxx 覆寫，Ctrl+A 後按 K 離開）
+make all            # 等同 flash + monitor
+```
 
-*(註：若您未來在 `.ioc` 中新增或修改了硬體引腳，僅需打開 `Main_AV_F407.ioc` 點擊儲存重新 Generate 即可，其餘日常編碼、編譯與燒錄皆可在本 IDE 內快速完成！)*
+若偏好在 IDE 內單步除錯，可安裝 **Cortex-Debug** 擴充套件，並在 `.vscode/launch.json` 中配置 ST-Link 除錯器，即可按 **F5** 一鍵燒錄與中斷點除錯。
+
+*(註：若你未來在 `.ioc` 中新增或修改了硬體引腳，請打開 `Main_Code/Main_AV_F407.ioc` 點擊儲存重新 Generate；其餘日常編碼、編譯與燒錄皆可在本 IDE 終端機以上述 `make` 指令快速完成。)*
 
 ---
 

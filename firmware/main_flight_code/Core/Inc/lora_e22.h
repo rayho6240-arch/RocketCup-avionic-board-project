@@ -1,0 +1,90 @@
+/**
+ ******************************************************************************
+ * @file    lora_e22.h
+ * @brief   E22-400T30S 433MHz LoRa 透傳模式驅動 (UART3)
+ *
+ * E22 為 SX1268 為核心之 UART 透傳模組。模式由 M1/M0 決定（見 main.h LORA433_*）：
+ *     M1=0 M0=0 → 透傳(Normal)：寫入 UART 的位元組即經空中發送（本驅動使用）
+ *     M1=0 M0=1 → WOR
+ *     M1=1 M0=0 → 設定(暫存器)
+ *     M1=1 M0=1 → 深度睡眠
+ * AUX(PE11)：HIGH=空閒可發送，LOW=忙線(發送中/模式切換/開機)。
+ * 接線（連線和基本硬體規格表.md）：UART3 TX=PD8/RX=PD9, M0=PD11, M1=PD10, RST=PD12, AUX=PE11。
+ * 腳位與 UART 已由 CubeMX 初始化（M0=M1=0 透傳、RST 釋放、AUX 為輸入）。
+ ******************************************************************************
+ */
+#ifndef __LORA_E22_H
+#define __LORA_E22_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "stm32f4xx_hal.h"
+#include "board_config.h"   /* IS_GROUND（地面站 433 接收不受本開關影響） */
+
+/* ============================================================
+ *  模組啟用開關
+ * ============================================================
+ * LORA433_ENABLE = 0：主航電開機不初始化 E22，遙測任務不重試亦不發送 433 下行。
+ *   E22 走獨立 UART3（不與 Flash 共用匯流排，無 E80 那種匯流排污染風險），停用僅
+ *   代表不啟用該鏈路；模組維持 CubeMX 預設腳位（M0=M1=0 透傳、RST 釋放、AUX 輸入），
+ *   未被餵入資料故不發射。★ 目前已啟用（=1）；如需停用（例如排查 3V3 短路、或不掛 433）
+ *   改回 0。
+ *   註：地面站（ROLE_GROUND）的 433「接收」固定啟用、不受本開關影響。
+ * LORA433_ENABLE = 1：正常初始化；AUX 逾時（模組未回應）時由遙測任務每 10s 週期性重試。 */
+#ifndef LORA433_ENABLE
+#define LORA433_ENABLE 1
+#endif
+
+/**
+ * @brief 綁定 UART、設透傳模式（M0=M1=0）+ 硬體重置，並以「設定模式回讀 CH 暫存器」
+ *        偵測模組是否真的在線（透傳模式無握手；AUX 為 PULLUP 無法判在線，故用回讀）。
+ *        於 main() 初始化區呼叫；偵測失敗時可由低優先任務週期性重試（P1）。
+ * @param huart E22 所掛的 UART（本專案為 &huart3）。
+ * @return HAL_OK = 模組有回應（在線）；HAL_TIMEOUT = 無回應（未接 / 接線錯 / 故障）。
+ *         注意：不論回傳值，鏈路皆標記為可用（s_inited=1）；回傳值僅供誠實回報 / 重試判斷。
+ */
+HAL_StatusTypeDef LoRaE22_Init(UART_HandleTypeDef *huart);
+
+/**
+ * @brief 透傳發送一筆位元組。
+ * @return HAL_OK 已送出；HAL_BUSY 模組忙線(AUX low)本次跳過；HAL_ERROR 參數錯誤/未初始化。
+ * @note  AUX 背壓：忙線即跳過不阻塞，由呼叫端（遙測任務）自我限流以對齊空中速率。
+ */
+HAL_StatusTypeDef LoRaE22_Send(const uint8_t *data, uint16_t len);
+
+/** @brief 模組是否空閒可發送（AUX=HIGH 且已初始化）。 */
+uint8_t LoRaE22_IsReady(void);
+void LoRaE22_PrintConfig(void);
+
+/**
+ * @brief 動態修改 E22 433 透傳頻率（進入設定模式寫 CH 暫存器後回透傳模式）。
+ *        CH = freq_mhz - 410；合法範圍 410~493 MHz（CH 0~83）。
+ *        設定存入 EEPROM，掉電不遺失。僅供地面站通訊測試使用。
+ * @param freq_mhz 目標頻率 MHz (410~493)
+ * @return HAL_OK 成功；HAL_ERROR 範圍錯誤或未初始化；HAL_TIMEOUT AUX 等待逾時。
+ */
+HAL_StatusTypeDef LoRaE22_SetFreqMHz(uint32_t freq_mhz);
+
+/**
+ * @brief 動態修改 E22 發射功率等級（寫 REG1 bit[1:0]，保留其餘位元）。
+ *        0=30dBm 1=27dBm 2=24dBm 3=21dBm。設定存入 EEPROM，掉電不遺失。
+ *        ★本板 3V3 供電無法穩定驅動 30dBm（突波電流會拉垮 3V3），建議維持 3(21dBm)。
+ * @return HAL_OK 成功；HAL_ERROR 未初始化/未回讀到暫存器；HAL_TIMEOUT AUX 逾時。
+ */
+HAL_StatusTypeDef LoRaE22_SetPowerLevel(uint8_t pwr_level);
+
+/**
+ * @brief 動態修改 E22 空中速率（寫 REG0 bit[2:0]，保留 UART baud/parity 位元）。
+ *        0=0.3k 1=1.2k 2=2.4k 3=4.8k 4=9.6k 5=19.2k 6=38.4k 7=62.5k。
+ *        ★兩端（火箭/地面站）必須相同才能通訊；速率越低射程/餘裕越好。
+ * @return HAL_OK 成功；HAL_ERROR 未初始化/未回讀到暫存器；HAL_TIMEOUT AUX 逾時。
+ */
+HAL_StatusTypeDef LoRaE22_SetAirRate(uint8_t air_rate);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __LORA_E22_H */

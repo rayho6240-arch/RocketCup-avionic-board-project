@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高安實業報價單清點系統</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-secondary: #161b26;
+            --bg-tertiary: #1f2638;
+            --accent-primary: #6366f1;
+            --accent-primary-glow: rgba(99, 102, 241, 0.15);
+            --accent-success: #10b981;
+            --accent-success-glow: rgba(16, 185, 129, 0.15);
+            --accent-warning: #f59e0b;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border-color: #2d3748;
+            --card-radius: 16px;
+            --transition-speed: 0.25s;
+        }
+
+        [data-theme="light"] {
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f1f5f9;
+            --accent-primary: #4f46e5;
+            --accent-primary-glow: rgba(79, 70, 229, 0.1);
+            --accent-success: #059669;
+            --accent-success-glow: rgba(5, 150, 105, 0.1);
+            --accent-warning: #d97706;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Plus Jakarta Sans', 'Noto Sans TC', system-ui, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 2rem 1.5rem;
+            transition: background-color var(--transition-speed), color var(--transition-speed);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Header glassmorphism styling */
+        header {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(22, 27, 38, 0.8) 100%);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-success));
+        }
+
+        .header-info h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.5px;
+            background: linear-gradient(90deg, var(--text-main), var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem 2rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .meta-item svg {
+            width: 16px;
+            height: 16px;
+            stroke: var(--accent-primary);
+            fill: none;
+            stroke-width: 2;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        /* Stats Section */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            transition: transform var(--transition-speed), border-color var(--transition-speed);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent-primary);
+        }
+
+        .stat-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background-color: var(--bg-tertiary);
+            color: var(--accent-primary);
+        }
+
+        .stat-icon.success {
+            color: var(--accent-success);
+        }
+
+        .stat-icon.warning {
+            color: var(--accent-warning);
+        }
+
+        .stat-details {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stat-val {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 0.2rem;
+        }
+
+        /* Filter and Search Section */
+        .toolbar {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 1.25rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .search-box {
+            position: relative;
+            flex: 1;
+            min-width: 280px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem 0.75rem 2.5rem;
+            background-color: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
+        }
+
+        .search-box input:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-primary-glow);
+        }
+
+        .search-box svg {
+            position: absolute;
+            left: 0.85rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            stroke: var(--text-muted);
+            fill: none;
+            stroke-width: 2;
+        }
+
+        .filter-buttons {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            transition: all var(--transition-speed) cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            border-color: var(--accent-primary);
+            background-color: var(--bg-tertiary);
+        }
+
+        .btn.active {
+            background-color: var(--accent-primary);
+            color: #ffffff;
+            border-color: var(--accent-primary);
+            box-shadow: 0 4px 12px var(--accent-primary-glow);
+        }
+
+        .btn-action {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-color);
+        }
+
+        .btn-action:hover {
+            background-color: var(--accent-primary-glow);
+            color: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+
+        .btn-danger:hover {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border-color: #ef4444;
+        }
+
+        /* Checklist Table Area */
+        .checklist-wrapper {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            box-shadow: 0 4px 25px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        /* Progress Bar Top of Table */
+        .table-progress {
+            width: 100%;
+            height: 5px;
+            background-color: var(--bg-tertiary);
+            position: relative;
+        }
+
+        .table-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-success));
+            transition: width 0.3s ease;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            background-color: var(--bg-tertiary);
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.95rem;
+            transition: background-color var(--transition-speed);
+        }
+
+        tr {
+            cursor: pointer;
+            transition: background-color var(--transition-speed), opacity var(--transition-speed);
+        }
+
+        tr:hover {
+            background-color: rgba(99, 102, 241, 0.03);
+        }
+
+        tr.checked {
+            opacity: 0.65;
+            background-color: rgba(16, 185, 129, 0.02);
+        }
+
+        tr.checked td.model-cell {
+            text-decoration: line-through;
+            color: var(--text-muted);
+        }
+
+        /* Custom Checkbox Design */
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            transition: all var(--transition-speed);
+            background-color: var(--bg-primary);
+        }
+
+        tr:hover .checkbox-container {
+            border-color: var(--accent-primary);
+        }
+
+        tr.checked .checkbox-container {
+            border-color: var(--accent-success);
+            background-color: var(--accent-success);
+            color: white;
+        }
+
+        .checkbox-container svg {
+            width: 12px;
+            height: 12px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 3;
+            transform: scale(0);
+            transition: transform 0.15s cubic-bezier(0.12, 0.4, 0.29, 1.46);
+        }
+
+        tr.checked .checkbox-container svg {
+            transform: scale(1);
+        }
+
+        .number-badge {
+            background-color: var(--bg-tertiary);
+            color: var(--text-muted);
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .price-text {
+            font-family: 'Plus Jakarta Sans', monospace;
+            font-weight: 500;
+        }
+
+        .amount-text {
+            font-family: 'Plus Jakarta Sans', monospace;
+            font-weight: 600;
+            color: var(--accent-primary);
+        }
+
+        [data-theme="light"] .amount-text {
+            color: var(--accent-primary);
+        }
+
+        tr.checked .amount-text {
+            color: var(--text-muted);
+        }
+
+        .leadtime-badge {
+            font-size: 0.8rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            background-color: var(--accent-primary-glow);
+            color: var(--accent-primary);
+            font-weight: 500;
+        }
+
+        tr.checked .leadtime-badge {
+            background-color: var(--bg-tertiary);
+            color: var(--text-muted);
+        }
+
+        .empty-state {
+            padding: 3rem;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            stroke: var(--text-muted);
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Toggle switches */
+        .theme-toggle {
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-speed);
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            transform: rotate(15deg);
+        }
+
+        .theme-toggle svg {
+            width: 18px;
+            height: 18px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+        }
+
+        /* Detail/Footer Info */
+        .footer-note {
+            margin-top: 2rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .footer-note a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+
+        .footer-note a:hover {
+            text-decoration: underline;
+        }
+
+        /* Mobile layout adaptations */
+        @media (max-width: 768px) {
+            header {
+                padding: 1.5rem;
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .header-controls {
+                justify-content: space-between;
+                margin-top: 1rem;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .toolbar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .filter-buttons {
+                justify-content: space-between;
+            }
+            .btn {
+                flex: 1;
+                justify-content: center;
+                font-size: 0.85rem;
+                padding: 0.5rem 0.8rem;
+            }
+            th, td {
+                padding: 0.75rem 1rem;
+            }
+        }
+
+        /* Print design rules */
+        @media print {
+            body {
+                background-color: white !important;
+                color: black !important;
+                padding: 0;
+            }
+            .container {
+                max-width: 100%;
+            }
+            header {
+                border: none;
+                box-shadow: none;
+                background: none;
+                padding: 0;
+                margin-bottom: 1.5rem;
+            }
+            header::before, .theme-toggle, .toolbar, .table-progress, .footer-note {
+                display: none !important;
+            }
+            .header-info h1 {
+                -webkit-text-fill-color: initial;
+                color: black;
+                font-size: 1.8rem;
+            }
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr) !important;
+                margin-bottom: 1.5rem;
+            }
+            .stat-card {
+                background: white !important;
+                border: 1px solid #ccc !important;
+                color: black !important;
+                padding: 1rem;
+            }
+            .stat-icon {
+                display: none !important;
+            }
+            .stat-val {
+                color: black !important;
+            }
+            .checklist-wrapper {
+                border: none !important;
+                box-shadow: none !important;
+            }
+            table {
+                border: 1px solid black;
+            }
+            th {
+                background-color: #f0f0f0 !important;
+                color: black !important;
+                border-bottom: 2px solid black;
+            }
+            td {
+                border-bottom: 1px solid #ccc;
+                color: black !important;
+            }
+            tr.checked {
+                opacity: 1 !important;
+                background-color: #f7f7f7 !important;
+            }
+            .checkbox-container {
+                border: 1.5px solid black !important;
+            }
+            tr.checked .checkbox-container {
+                background-color: #e0e0e0 !important;
+                color: black !important;
+            }
+            .amount-text {
+                color: black !important;
+            }
+            .leadtime-badge {
+                background: none !important;
+                border: 1px solid #ccc;
+                color: black !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Main Header -->
+        <header>
+            <div class="header-info">
+                <h1>高安實業有限公司 — 報價單清點系統</h1>
+                <div class="header-meta">
+                    <div class="meta-item">
+                        <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><path d="M17 11h1v4h-1z"></path></svg>
+                        <span>客戶：國立成功大學 — 賴致全</span>
+                    </div>
+                    <div class="meta-item">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        <span>報價日期：2026 / 05 / 06</span>
+                    </div>
+                    <div class="meta-item">
+                        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                        <span>聯絡業務：蕭傳霖 (02-22662511)</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="header-controls">
+                <button class="theme-toggle" id="themeToggleBtn" title="切換深淺色主題" aria-label="Toggle Theme">
+                    <svg id="themeIcon" viewBox="0 0 24 24">
+                        <!-- Moon representation -->
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Dynamic Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                </div>
+                <div class="stat-details">
+                    <span class="stat-val" id="totalAmount">TWD 22,280</span>
+                    <span class="stat-label">報價單總金額 (含稅)</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon success">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                </div>
+                <div class="stat-details">
+                    <span class="stat-val" id="progressVal">0 / 48 (0%)</span>
+                    <span class="stat-label">品項清點進度</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon warning">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                </div>
+                <div class="stat-details">
+                    <span class="stat-val" id="checkedAmount">TWD 0</span>
+                    <span class="stat-label">已確認抵達金額</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter & Actions Toolbar -->
+        <div class="toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="searchInput" placeholder="搜尋料號、型號...">
+            </div>
+
+            <div class="filter-buttons">
+                <button class="btn active" id="btnAll">全部品項</button>
+                <button class="btn" id="btnPending">未清點</button>
+                <button class="btn" id="btnChecked">已完成</button>
+                <button class="btn btn-action btn-danger" id="btnReset" title="重設清點狀態">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                    重設
+                </button>
+            </div>
+        </div>
+
+        <!-- Checklist Table Box -->
+        <div class="checklist-wrapper">
+            <div class="table-progress">
+                <div class="table-progress-fill" id="progressBar"></div>
+            </div>
+            
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 60px; text-align: center;">清點</th>
+                            <th style="width: 80px;">項次</th>
+                            <th>元件型號 / 規格描述</th>
+                            <th style="text-align: right; width: 120px;">單價 (TWD)</th>
+                            <th style="text-align: center; width: 100px;">數量</th>
+                            <th style="text-align: right; width: 140px;">小計 (TWD)</th>
+                            <th style="text-align: center; width: 120px;">交期</th>
+                        </tr>
+                    </thead>
+                    <tbody id="checklistBody">
+                        <!-- Rows injected via Javascript -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="empty-state" id="emptyState" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+                <p>沒有符合篩選條件的元件品項。</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer-note">
+            <p>高安實業有限公司 • 地址：新北市土城區學府路2段222號 • 統一編號：22711102</p>
+            <p>此系統純網頁端運作，清點狀態會自動儲存於此瀏覽器的 LocalStorage 空間中。</p>
+        </footer>
+    </div>
+
+    <script>
+        // High quality data scraped directly from the quotation PDF
+        const quotationItems = [
+            { id: 1, model: "R-78K5.0-2.0L", price: 209.0, qty: 5, lead: "2 週" },
+            { id: 2, model: "R-78K3.3-2.0L", price: 209.0, qty: 5, lead: "2 週" },
+            { id: 3, model: "CC1210KKX7RGBB106", price: 15.6, qty: 70, lead: "2 週" },
+            { id: 4, model: "AC0805KKX7R0BB104", price: 3.7, qty: 100, lead: "2 週" },
+            { id: 5, model: "CC1210MKX7R6BB476", price: 53.0, qty: 20, lead: "2 週" },
+            { id: 6, model: "SMAJ9.0CA", price: 11.7, qty: 10, lead: "2 週" },
+            { id: 7, model: "SS24", price: 12.2, qty: 10, lead: "2 週" },
+            { id: 8, model: "APT2012SGC", price: 5.3, qty: 25, lead: "2 週" },
+            { id: 9, model: "USB4105-GF-A-120", price: 33.0, qty: 7, lead: "2 週" },
+            { id: 10, model: "SM04B-GHE-TB(LF)(SN)", price: 19.0, qty: 45, lead: "2 週" },
+            { id: 11, model: "TYA40204R7M-10", price: 12.6, qty: 15, lead: "2 週" },
+            { id: 12, model: "DMP3056L-7", price: 16.7, qty: 15, lead: "2 週" },
+            { id: 13, model: "CMT-8504-100-SMT-TR", price: 51.0, qty: 10, lead: "2 週" },
+            { id: 14, model: "CC12H15A-TR", price: 41.0, qty: 10, lead: "2 週" },
+            { id: 15, model: "SRN3010BTA-330M", price: 14.7, qty: 10, lead: "2 週" },
+            { id: 16, model: "SI7613DN-T1-GE3", price: 42.0, qty: 10, lead: "2 週" },
+            { id: 17, model: "LD1117S33TR", price: 10.0, qty: 10, lead: "2 週" },
+            { id: 18, model: "LM2596SX-5.0/NOPB", price: 255.0, qty: 3, lead: "2 週" },
+            { id: 19, model: "LTC4412IS6#TRPBF", price: 172.0, qty: 10, lead: "2 週" },
+            { id: 20, model: "RC0805FR-0722RL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 21, model: "RC0805FR-10100RL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 22, model: "CRCW0805180RFKEA", price: 1.2, qty: 20, lead: "2 週" },
+            { id: 23, model: "RC0805FR-07220RL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 24, model: "RC0805FR-07330RP", price: 0.7, qty: 100, lead: "2 週" },
+            { id: 25, model: "RC0805FR-10560RL", price: 0.29, qty: 100, lead: "2 週" },
+            { id: 26, model: "RC0805FR-131KL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 27, model: "RC0805FR-074K99L", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 28, model: "RC0805FR-105K1L", price: 0.45, qty: 100, lead: "2 週" },
+            { id: 29, model: "RC0805FR-1010KL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 30, model: "RC0805FR-07100KL", price: 0.66, qty: 100, lead: "2 週" },
+            { id: 31, model: "RC0805FR-07470KL", price: 0.95, qty: 10, lead: "2 週" },
+            { id: 32, model: "RC0805FR-131ML", price: 0.95, qty: 10, lead: "2 週" },
+            { id: 33, model: "S2B-PH-K(LF)(SN)", price: 9.4, qty: 10, lead: "2 週" },
+            { id: 34, model: "43650-0221", price: 83.7, qty: 5, lead: "2 週" },
+            { id: 35, model: "1984617", price: 24.0, qty: 8, lead: "2 週" },
+            { id: 36, model: "T491X107K016AT7280", price: 61.0, qty: 10, lead: "2 週" },
+            { id: 37, model: "865060657012", price: 52.0, qty: 30, lead: "2 週" },
+            { id: 38, model: "TPSE477K010R0100", price: 62.0, qty: 10, lead: "2 週" },
+            { id: 39, model: "SB540", price: 15.0, qty: 10, lead: "2 週" },
+            { id: 40, model: "PMEG3030EP,115", price: 22.4, qty: 30, lead: "2 週" },
+            { id: 41, model: "AP3216ID", price: 7.3, qty: 10, lead: "2 週" },
+            { id: 42, model: "SMAJ5.0A", price: 10.7, qty: 15, lead: "2 週" },
+            { id: 43, model: "VS12VUA1VWMTFTR", price: 17.0, qty: 10, lead: "2 週" },
+            { id: 44, model: "IRLML6344TRPBF", price: 13.2, qty: 10, lead: "2 週" },
+            { id: 45, model: "B2B-EH-A(LF)(SN)", price: 4.0, qty: 13, lead: "2 週" },
+            { id: 46, model: "61304011121", price: 63.0, qty: 5, lead: "2 週" },
+            { id: 47, model: "ANT-433-CW-HW-SMA", price: 371.0, qty: 5, lead: "2 週" },
+            { id: 48, model: "ANT-916-CW-HWR-SMA", price: 583.0, qty: 5, lead: "2 週" }
+        ];
+
+        // State Manager
+        const STATE_KEY = 'quotation_checklist_20260506';
+        let checkedIds = new Set();
+        let currentFilter = 'all'; // all, pending, checked
+        let searchQuery = '';
+
+        // UI Selectors
+        const tableBody = document.getElementById('checklistBody');
+        const emptyState = document.getElementById('emptyState');
+        const totalAmountEl = document.getElementById('totalAmount');
+        const progressValEl = document.getElementById('progressVal');
+        const checkedAmountEl = document.getElementById('checkedAmount');
+        const progressBar = document.getElementById('progressBar');
+        const searchInput = document.getElementById('searchInput');
+        
+        // Theme settings
+        const themeToggleBtn = document.getElementById('themeToggleBtn');
+        const themeIcon = document.getElementById('themeIcon');
+        
+        // Initialize State from Storage
+        function initStorage() {
+            try {
+                const stored = localStorage.getItem(STATE_KEY);
+                if (stored) {
+                    checkedIds = new Set(JSON.parse(stored));
+                }
+            } catch (e) {
+                console.error("Could not load checklist state from localStorage", e);
+            }
+        }
+
+        function saveStorage() {
+            try {
+                localStorage.setItem(STATE_KEY, JSON.stringify([...checkedIds]));
+            } catch (e) {
+                console.error("Could not save checklist state to localStorage", e);
+            }
+        }
+
+        // Toggle Single Item
+        function toggleItem(id) {
+            if (checkedIds.has(id)) {
+                checkedIds.delete(id);
+            } else {
+                checkedIds.add(id);
+            }
+            saveStorage();
+            updateUI();
+        }
+
+        // Format Currency Helper
+        function formatTWD(num) {
+            return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(num);
+        }
+
+        // Update calculations, counters and status indicators
+        function updateUI() {
+            // 1. Calculate Statistics
+            const totalItems = quotationItems.length;
+            const checkedItemsCount = checkedIds.size;
+            const percent = totalItems > 0 ? Math.round((checkedItemsCount / totalItems) * 100) : 0;
+            
+            // Subtotal logic & calculation
+            let sumTotal = 0;
+            let sumChecked = 0;
+            quotationItems.forEach(item => {
+                const itemTotal = item.price * item.qty;
+                sumTotal += itemTotal;
+                if (checkedIds.has(item.id)) {
+                    sumChecked += itemTotal;
+                }
+            });
+            
+            // Tax adjustment (5%)
+            const totalTaxed = Math.round(sumTotal * 1.05);
+            const checkedTaxed = Math.round(sumChecked * 1.05);
+
+            // Update stats cards
+            totalAmountEl.textContent = formatTWD(totalTaxed);
+            progressValEl.textContent = `${checkedItemsCount} / ${totalItems} (${percent}%)`;
+            checkedAmountEl.textContent = formatTWD(checkedTaxed);
+            progressBar.style.width = `${percent}%`;
+
+            // 2. Render List with Filters
+            renderList();
+        }
+
+        function renderList() {
+            tableBody.innerHTML = '';
+            
+            const filtered = quotationItems.filter(item => {
+                const matchesSearch = item.model.toLowerCase().includes(searchQuery.toLowerCase());
+                const isChecked = checkedIds.has(item.id);
+                
+                if (currentFilter === 'pending') {
+                    return matchesSearch && !isChecked;
+                } else if (currentFilter === 'checked') {
+                    return matchesSearch && isChecked;
+                }
+                return matchesSearch;
+            });
+
+            if (filtered.length === 0) {
+                emptyState.style.display = 'block';
+            } else {
+                emptyState.style.display = 'none';
+            }
+
+            filtered.forEach(item => {
+                const isChecked = checkedIds.has(item.id);
+                const subtotal = item.price * item.qty;
+                
+                const tr = document.createElement('tr');
+                if (isChecked) tr.classList.add('checked');
+                
+                tr.addEventListener('click', (e) => {
+                    // Prevent check trigger if user is selecting text
+                    if (window.getSelection().toString() === '') {
+                        toggleItem(item.id);
+                    }
+                });
+
+                tr.innerHTML = `
+                    <td style="text-align: center;">
+                        <div class="checkbox-container">
+                            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        </div>
+                    </td>
+                    <td><span class="number-badge">${item.id}</span></td>
+                    <td class="model-cell" style="font-weight: 600;">${item.model}</td>
+                    <td class="price-text" style="text-align: right;">${item.price.toLocaleString('en-US', {minimumFractionDigits: 1})}</td>
+                    <td style="text-align: center; font-weight: 500;">${item.qty}</td>
+                    <td class="amount-text" style="text-align: right;">${Math.round(subtotal).toLocaleString('en-US')}</td>
+                    <td style="text-align: center;"><span class="leadtime-badge">${item.lead}</span></td>
+                `;
+                
+                tableBody.appendChild(tr);
+            });
+        }
+
+        // Theme toggle logic
+        function initTheme() {
+            const currentTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            updateThemeIcon(currentTheme);
+        }
+
+        function updateThemeIcon(theme) {
+            if (theme === 'light') {
+                themeIcon.innerHTML = '<path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"></path><path d="M3 12h1M20 12h1M12 3v1M12 20v1M5.6 5.6l.7.7M17.7 17.7l.7.7M17.7 5.6l-.7.7M5.6 17.7l-.7.7"></path>';
+            } else {
+                themeIcon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+            }
+        }
+
+        themeToggleBtn.addEventListener('click', () => {
+            let theme = document.documentElement.getAttribute('data-theme');
+            let newTheme = theme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        });
+
+        // Search Input Action
+        searchInput.addEventListener('input', (e) => {
+            searchQuery = e.target.value;
+            renderList();
+        });
+
+        // Filter Buttons Action
+        const filters = [
+            { el: document.getElementById('btnAll'), type: 'all' },
+            { el: document.getElementById('btnPending'), type: 'pending' },
+            { el: document.getElementById('btnChecked'), type: 'checked' }
+        ];
+
+        filters.forEach(filter => {
+            filter.el.addEventListener('click', () => {
+                filters.forEach(f => f.el.classList.remove('active'));
+                filter.el.classList.add('active');
+                currentFilter = filter.type;
+                renderList();
+            });
+        });
+
+        // Reset Button Action
+        document.getElementById('btnReset').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (confirm('確定要清除所有清點核對記錄嗎？')) {
+                checkedIds.clear();
+                saveStorage();
+                updateUI();
+            }
+        });
+
+        // Start Application
+        initTheme();
+        initStorage();
+        updateUI();
+    </script>
+</body>
+</html>

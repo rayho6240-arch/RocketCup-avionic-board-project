@@ -1,0 +1,436 @@
+/*
+ * ground_station.c — 地面站接收器主流程（ROLE_GROUND）
+ * ===========================================================================
+ * 整檔以 #if IS_GROUND 包住：主/備航電編譯為空，零影響。
+ *
+ * 雙鏈路接收火箭下行 TelemetryPacket_t：
+ *   E22 433（USART3 透傳）：中斷接收 → 位元組環形緩衝 → telem_rx 同步FSM
+ *   E80 920（SX126x SPI3）：輪詢 DIO1 → LoRaE80_ReadPacket → 同 telem_rx 解析（含 RSSI/SNR）
+ * + 讀自身 GPS（USART6），用 gs_timesync 把火箭 tick 對齊到 GPS 紀律的牆鐘。
+ * 每筆有效封包組成 GsLogRecord → 三路落地：USB-CDC(CSV) / SD(CSV) / Flash(二進位 append)。
+ *
+ * GS_USB_SELFTEST=1：略過 LoRa，產生模擬遙測以「相同輸出格式」串流 USB（並寫 SD/Flash），
+ * 用於在沒有任何 LoRa 流量下單獨確認 USB 列舉與資料管線正常。
+ */
+#include "board_config.h"
+#if IS_GROUND
+
+#include "ground_station.h"
+#include "main.h"
+#include "cmsis_os.h"
+#include <stdio.h>
+#include <string.h>
+
+#include "telem_rx.h"
+#include "gs_timesync.h"
+#include "gs_log.h"
+#include "gs_lora_test.h"
+#include "gps.h"
+#include "lora_e22.h"
+#include "lora_e80.h"
+#include "w25qxx.h"
+#include "flash_ring_math.h"
+#include "fatfs.h"
+#include "usb_device.h"
+#include "usbd_cdc_if.h"
+
+#ifndef GS_USB_SELFTEST
+#define GS_USB_SELFTEST 0          /* 1 = USB 自測模式（不靠 LoRa） */
+#endif
+#define GS_TIMESYNC_EMA_SHIFT  3   /* rocket↔ground 偏移 EMA：alpha = 1/8 */
+#define GS_POLL_DELAY_MS       2   /* 主迴圈輪詢週期（~500Hz） */
+
+extern UART_HandleTypeDef huart3;  /* E22 433 透傳（main.c 定義） */
+extern IWDG_HandleTypeDef hiwdg;   /* 看門狗（main.c 定義） */
+extern uint8_t lora433_ok;         /* E22 433MHz 模組就緒狀態（main.c 定義） */
+extern uint8_t lora920_ok;         /* E80 920MHz 模組就緒狀態（main.c 定義） */
+
+/* ---- 狀態 ---- */
+static TelemRx_t     s_rx433;
+static TelemRx_t     s_rx920;
+static GsTimeSync_t  s_ts;
+static uint32_t      s_last_fix_tick = 0;
+static uint32_t      s_stat_433_cnt = 0;
+static uint32_t      s_stat_920_cnt = 0;
+
+/* 大緩衝置於檔案範圍，降低任務堆疊壓力（地面站單一任務，安全） */
+static char    s_row[GS_LOG_CSV_MAX];
+static uint8_t s_e80buf[255];
+
+/* ---- 指示燈（板上三顆，地面站用途）----
+ *   PE2 LED_SYS    : 心跳閃爍（1Hz）= 韌體存活、主迴圈在跑
+ *   PE3 LED_State1 : GPS 定位有效 = 恆亮（時間對齊錨點就緒）
+ *   PE4 LED_State2 : 接收活動 = 收到下行封包即短亮，隨流量閃爍
+ * 規格表標「低/高電平控制」；此處採 active-high（SET=亮，GPIO init 為 RESET=滅）。
+ * 若實際硬體為 active-low，將 GS_LED_ON/GS_LED_OFF 對調即可。 */
+#define GS_LED_ON       GPIO_PIN_SET
+#define GS_LED_OFF      GPIO_PIN_RESET
+#define GS_LED1_Pin     GPIO_PIN_3        /* PE3 LED_State1（main.h 未命名，直接用腳號） */
+#define GS_RX_LED_MS    120U              /* 收到封包後亮燈持續（製造每包可見閃爍） */
+#define GS_HEARTBEAT_MS 500U              /* LED_SYS 心跳半週期（1Hz 閃） */
+
+static volatile uint32_t s_last_pkt_tick = 0;   /* 最後一筆有效封包 tick（任一鏈路） */
+
+/* 依現況驅動三顆 LED。每個主迴圈週期呼叫一次。 */
+static void gs_leds_update(uint32_t now, uint8_t gps_fix)
+{
+    static uint32_t hb_tick = 0;
+    static uint8_t  hb_on   = 0;
+    if ((now - hb_tick) >= GS_HEARTBEAT_MS) {       /* PE2：心跳 */
+        hb_tick = now;
+        hb_on ^= 1U;
+        HAL_GPIO_WritePin(LED_SYS_GPIO_Port, LED_SYS_Pin, hb_on ? GS_LED_ON : GS_LED_OFF);
+    }
+    HAL_GPIO_WritePin(GPIOE, GS_LED1_Pin,            /* PE3：GPS fix 恆亮 */
+                      gps_fix ? GS_LED_ON : GS_LED_OFF);
+    uint8_t rx_active = (s_last_pkt_tick != 0) && ((now - s_last_pkt_tick) < GS_RX_LED_MS);
+    HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin,  /* PE4：接收活動 */
+                      rx_active ? GS_LED_ON : GS_LED_OFF);
+}
+
+/* ---- USART3（E22）位元組環形緩衝：ISR 推入、任務取出 ---- */
+#define U3_RING_SZ 1024U
+static volatile uint8_t  s_u3_ring[U3_RING_SZ];
+static volatile uint16_t s_u3_head = 0, s_u3_tail = 0;
+static uint8_t           s_u3_rxbuf[96];   /* ReceiveToIdle 暫存 */
+static volatile uint32_t s_u3_rx_bytes = 0;  /* USART3(E22 433) 累計收到的原始位元組數（含雜訊） */
+
+static void u3_push(uint8_t b)
+{
+    uint16_t nh = (uint16_t)((s_u3_head + 1U) % U3_RING_SZ);
+    if (nh != s_u3_tail) { s_u3_ring[s_u3_head] = b; s_u3_head = nh; }  /* 滿則丟 */
+}
+static int u3_pop(uint8_t *b)
+{
+    if (s_u3_tail == s_u3_head) return 0;
+    *b = s_u3_ring[s_u3_tail];
+    s_u3_tail = (uint16_t)((s_u3_tail + 1U) % U3_RING_SZ);
+    return 1;
+}
+
+void GroundStation_OnUart3RxEvent(uint16_t Size)
+{
+    s_u3_rx_bytes += Size;   /* 統計：診斷「有沒有任何位元組從 E22 進來」 */
+    for (uint16_t i = 0; i < Size; i++) u3_push(s_u3_rxbuf[i]);
+    HAL_UARTEx_ReceiveToIdle_IT(&huart3, s_u3_rxbuf, sizeof(s_u3_rxbuf));  /* 重新掛載 */
+}
+
+/* USART3(E22 433 RX) 錯誤復原：清 ORE/雜訊旗標並重新掛載 ReceiveToIdle。
+ * 由 main.c 的 HAL_UART_ErrorCallback 在 USART3 出錯時轉接。
+ * 若不做：收包時 printf/SD 寫入很慢，E22 以 115200 繼續吐下一包 → USART3 溢位(ORE)
+ * → HAL 中止 RX 且不會自己重掛 → raw 從此凍結、之後完全收不到。此為地面站
+ * 「收一包就死」的根因修正（清旗標做法比照 main.c USART2 既有寫法）。 */
+void GroundStation_OnUart3Error(void)
+{
+    __HAL_UART_CLEAR_OREFLAG(&huart3);
+    (void)huart3.Instance->SR;
+    (void)huart3.Instance->DR;
+    HAL_UARTEx_ReceiveToIdle_IT(&huart3, s_u3_rxbuf, sizeof(s_u3_rxbuf));  /* 重新掛載 */
+}
+
+/* ---- SD（FatFS CSV） ---- */
+static FIL      s_sd_file;
+static uint8_t  s_sd_ok = 0;
+static uint32_t s_sd_rows = 0;
+
+static void gs_sd_open(void)
+{
+    char name[16];
+    FILINFO fno;
+    HAL_IWDG_Refresh(&hiwdg);
+    if (f_mount(&SDFatFS, SDPath, 1) != FR_OK) {
+        HAL_IWDG_Refresh(&hiwdg);
+        return;
+    }
+    HAL_IWDG_Refresh(&hiwdg);
+    for (int i = 0; i < 1000; i++) {
+        snprintf(name, sizeof(name), "GSLOG%03d.CSV", i);
+        if (f_stat(name, &fno) == FR_NO_FILE) break;   /* 取下一個未用檔名 */
+    }
+    HAL_IWDG_Refresh(&hiwdg);
+    if (f_open(&s_sd_file, name, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
+        char hdr[GS_LOG_CSV_MAX];
+        int n = GsLog_CsvHeader(hdr, sizeof(hdr));
+        UINT bw;
+        if (n > 0) f_write(&s_sd_file, hdr, (UINT)n, &bw);
+        f_sync(&s_sd_file);
+        s_sd_ok = 1;
+    }
+    HAL_IWDG_Refresh(&hiwdg);
+}
+static void gs_sd_write(const char *row, uint16_t n)
+{
+    if (!s_sd_ok) return;
+    UINT bw;
+    f_write(&s_sd_file, row, (UINT)n, &bw);
+    if ((++s_sd_rows % 16U) == 0U) f_sync(&s_sd_file);   /* 定期 flush 降低掉電損失 */
+}
+
+/* ---- Flash（W25Q128 ring 區順序 append；用前才擦的 erase-ahead） ---- */
+static uint32_t s_fl_addr;        /* 寫入頭 */
+static uint32_t s_fl_erased_end;  /* 已擦至此位址（exclusive） */
+
+static void gs_flash_init(void)
+{
+    s_fl_addr = FLASH_RINGBUF_ADDR;
+    s_fl_erased_end = FLASH_RINGBUF_ADDR;   /* 尚未擦任何 sector */
+}
+static void gs_flash_ensure_erased(uint32_t addr, uint32_t n)
+{
+    while (addr + n > s_fl_erased_end) {
+        if (W25QXX_EraseSector(s_fl_erased_end) != W25QXX_OK) break;
+        s_fl_erased_end += FLASH_RING_SECTOR_SIZE;
+    }
+}
+static void gs_flash_append(const GsLogRecord_t *rec)
+{
+    if (s_fl_addr + GS_LOG_RECORD_SIZE > FLASH_RINGBUF_END + 1UL) {
+        s_fl_addr = FLASH_RINGBUF_ADDR;          /* 回繞，重新從頭擦 */
+        s_fl_erased_end = FLASH_RINGBUF_ADDR;
+    }
+    gs_flash_ensure_erased(s_fl_addr, GS_LOG_RECORD_SIZE);
+    if (W25QXX_WriteData(s_fl_addr, (const uint8_t *)rec, GS_LOG_RECORD_SIZE) == W25QXX_OK) {
+        s_fl_addr += GS_LOG_RECORD_SIZE;
+    }
+}
+
+/* ---- USB-CDC（best-effort，PC 沒讀就丟） ---- */
+static void gs_usb_send(const uint8_t *buf, uint16_t n)
+{
+    for (int i = 0; i < 8; i++) {
+        if (CDC_Transmit_FS((uint8_t *)buf, n) == USBD_OK) return;
+        osDelay(1);   /* 前一筆未送完，稍等再試 */
+    }
+}
+
+/* ---- 共用：一筆封包 → 對齊時間 → 組紀錄 → 三路落地 ---- */
+static void gs_handle_packet(uint8_t link, const TelemetryPacket_t *pkt,
+                             int16_t rssi, int16_t snr)
+{
+    uint32_t rx_tick = HAL_GetTick();
+    s_last_pkt_tick = rx_tick;          /* 接收活動指示燈（PE4）用 */
+    GsTimeSync_OnPacket(&s_ts, pkt->tick_ms, rx_tick, GS_TIMESYNC_EMA_SHIFT);
+    uint32_t rx_utc = GsTimeSync_GroundUtcMs(&s_ts, rx_tick);
+    uint32_t al_utc = GsTimeSync_RocketAlignedUtcMs(&s_ts, pkt->tick_ms);
+    int32_t  off    = GsTimeSync_Offset(&s_ts);
+
+    const GPS_Data_t *g = GPS_GetData();
+    GsLogRecord_t rec;
+    GsLog_BuildRecord(&rec, link, rssi, snr, rx_tick, rx_utc, al_utc, off,
+                      g->lat_1e6, g->lon_1e6, (int16_t)g->altitude_m,
+                      g->satellites, g->fix_valid, pkt);
+
+    int n = GsLog_FormatCsvRow(s_row, sizeof(s_row), &rec);
+    if (n > (int)sizeof(s_row) - 1) n = (int)sizeof(s_row) - 1;  /* 防 snprintf 截斷回傳值溢位 */
+    if (n > 0) {
+        gs_usb_send((const uint8_t *)s_row, (uint16_t)n);
+        gs_sd_write(s_row, (uint16_t)n);
+    }
+    gs_flash_append(&rec);
+
+    /* 更新通訊測試統計 */
+    GsLoraTest_UpdateStats(link, rssi, snr, 1 /* crc_ok */);
+    if (link == GS_LINK_920) s_stat_920_cnt++;
+    else s_stat_433_cnt++;
+
+    /* 及時（實時）控制台印出收到的下行遙測封包摘要。
+     * vz / pos / galt：GUI 圖表（EKF 垂直速度）與 GPS 地圖（火箭經緯度）需要，
+     * 封包本就攜帶，此處補印出（pos 格式與航電 [GPS] 行一致：±d.6f）。 */
+    {
+        char lat_sign = (pkt->gps_lat_1e6 < 0) ? '-' : '+';
+        char lon_sign = (pkt->gps_lon_1e6 < 0) ? '-' : '+';
+        uint32_t lat_abs = (pkt->gps_lat_1e6 < 0) ? (uint32_t)(-pkt->gps_lat_1e6) : (uint32_t)pkt->gps_lat_1e6;
+        uint32_t lon_abs = (pkt->gps_lon_1e6 < 0) ? (uint32_t)(-pkt->gps_lon_1e6) : (uint32_t)pkt->gps_lon_1e6;
+        printf("[GS_PKT] link:%uMHz rssi:%d snr:%d seq:%u fsm:%u alt:%dcm vz:%dcms baro:%dcm bat:%dmV "
+               "gps:%u/%u pos:%c%lu.%06lu,%c%lu.%06lu galt:%dm accel:%d,%d,%d\r\n",
+               (unsigned)((link == GS_LINK_920) ? 920U : 433U),
+               (int)rssi, (int)snr, (unsigned)pkt->seq, (unsigned)pkt->fsm_state,
+               (int)pkt->ekf_pos_z_cm, (int)pkt->ekf_vel_z_cms, (int)pkt->baro_alt_cm,
+               (unsigned)pkt->bat_mv,
+               (unsigned)pkt->gps_sats, (unsigned)pkt->gps_fix,
+               lat_sign, (unsigned long)(lat_abs / 1000000U), (unsigned long)(lat_abs % 1000000U),
+               lon_sign, (unsigned long)(lon_abs / 1000000U), (unsigned long)(lon_abs % 1000000U),
+               (int)pkt->gps_alt_m,
+               (int)pkt->imu_ax_mg, (int)pkt->imu_ay_mg, (int)pkt->imu_az_mg);
+    }
+}
+
+#if GS_USB_SELFTEST
+/* 模擬器：以 ~10Hz 產生決定性「走動」遙測，串流相同格式驗證 USB（不碰 LoRa）。 */
+static void gs_usb_selftest_loop(void)
+{
+    uint8_t  seq = 0;
+    uint32_t tick = 0;
+    int32_t  alt_m = 0;
+    int      dir = 1;
+
+    GsTimeSync_OnGpsFix(&s_ts, 120000U, HAL_GetTick());  /* 假錨點 12:00:00 */
+
+    for (;;) {
+        TelemetryPacket_t pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        pkt.sync0 = TELEM_SYNC0;
+        pkt.sync1 = TELEM_SYNC1;
+        pkt.seq = seq++;
+        pkt.tick_ms = tick;
+        pkt.fsm_state = (alt_m > 1000) ? 3 : 1;
+        pkt.ekf_pos_z_cm = alt_m * 100;
+        pkt.baro_alt_cm = alt_m * 100;
+        pkt.gps_lat_1e6 = 25033000;
+        pkt.gps_lon_1e6 = 121564000;
+        pkt.gps_alt_m = (int16_t)alt_m;
+        pkt.gps_sats = 9;
+        pkt.gps_fix = 1;
+        pkt.bat_mv = 11800;
+        pkt.crc16 = crc16_ccitt_false((const uint8_t *)&pkt, (uint16_t)(TELEM_PACKET_SIZE - 2));
+
+        uint8_t link = (seq & 1U) ? GS_LINK_920 : GS_LINK_433;     /* 兩鏈路交替 */
+        int16_t rssi = (link == GS_LINK_920) ? (int16_t)-85 : GS_RSSI_NA;
+        int16_t snr  = (link == GS_LINK_920) ? (int16_t)40  : GS_SNR_NA;
+        gs_handle_packet(link, &pkt, rssi, snr);
+
+        alt_m += dir * 20;                          /* 高度拋物線升降 */
+        if (alt_m >= 3000) dir = -1;
+        if (alt_m <= 0) { alt_m = 0; dir = 1; }
+        tick += 100;
+
+        gs_leds_update(HAL_GetTick(), 0);   /* 自測無實體 GPS：心跳 + 接收活動仍會動 */
+        HAL_IWDG_Refresh(&hiwdg);
+        osDelay(100);   /* 10 Hz */
+    }
+}
+#endif /* GS_USB_SELFTEST */
+
+void GroundStation_Run(void)
+{
+    printf("\r\n[ROLE] GROUND_STATION  RX=E22(433)+E80(920)  GPS+SD+Flash+USB-CDC%s\r\n",
+           GS_USB_SELFTEST ? "  [USB SELFTEST]" : "");
+    printf("[LED] PE2 心跳(存活) / PE3 GPS定位 / PE4 接收活動\r\n");
+    printf("[GS_LORA_INIT] 433MHz(E22):%s | 920MHz(E80):%s\r\n",
+           lora433_ok ? "OK (Ready)" : "FAIL/OFF",
+           lora920_ok ? "OK (Ready)" : "FAIL/OFF");
+    if (lora433_ok) {
+        LoRaE22_PrintConfig();
+    }
+    if (lora920_ok) {
+        LoRaE80_PrintConfig();
+    }
+
+    TelemRx_Init(&s_rx433);
+    TelemRx_Init(&s_rx920);
+    GsTimeSync_Init(&s_ts);
+    gs_sd_open();
+    gs_flash_init();
+    GsLoraTest_Init();   /* 啟動 UART2 命令介面 + 統計 */
+
+#if GS_USB_SELFTEST
+    gs_usb_selftest_loop();   /* 不返回 */
+#else
+    /* 啟動 E22 USART3 中斷接收（E80 已於 main 進入連續 RX） */
+    HAL_UARTEx_ReceiveToIdle_IT(&huart3, s_u3_rxbuf, sizeof(s_u3_rxbuf));
+
+    for (;;) {
+        /* GPS：新 fix 時更新地面牆鐘錨點 */
+        GPS_Update();
+        const GPS_Data_t *g = GPS_GetData();
+        if (g->fix_valid && g->last_fix_tick != s_last_fix_tick) {
+            GsTimeSync_OnGpsFix(&s_ts, g->utc_hhmmss, g->last_fix_tick);
+            s_last_fix_tick = g->last_fix_tick;
+        }
+
+        /* E22 433：取出環形緩衝餵入同步FSM。
+         * 用 TelemRx_FeedAny「不過濾」：湊滿一筆就交出，CRC 失敗也印出來供除錯（看訊號品質）。 */
+        uint8_t b;
+        TelemetryPacket_t pkt;
+        while (u3_pop(&b)) {
+            uint8_t crc_ok = 0;
+            if (TelemRx_FeedAny(&s_rx433, b, &pkt, &crc_ok)) {
+                int16_t rssi = GS_RSSI_NA;
+                uint8_t rssi_byte;
+                if (u3_pop(&rssi_byte)) {
+                    rssi = (int16_t)(-(256 - (int)rssi_byte));
+                }
+                if (crc_ok) {
+                    gs_handle_packet(GS_LINK_433, &pkt, rssi, GS_SNR_NA);   /* CRC 過：正常落地 + 印 [GS_PKT] */
+                } else {
+                    /* CRC 失敗也印（不落地 SD/Flash、不動時間同步），供人工看收到什麼 */
+                    printf("[GS_PKT?] link:433MHz CRC_BAD rssi:%d seq:%u fsm:%u alt:%dcm baro:%dcm bat:%dmV\r\n",
+                           (int)rssi, (unsigned)pkt.seq, (unsigned)pkt.fsm_state,
+                           (int)pkt.ekf_pos_z_cm, (int)pkt.baro_alt_cm, (unsigned)pkt.bat_mv);
+                }
+            }
+        }
+
+        /* E80 920：DIO1 觸發則讀封包，payload 餵入同步FSM（含 RSSI/SNR） */
+        if (LoRaE80_RxReady()) {
+            uint8_t el = 0;
+            int16_t rssi = GS_RSSI_NA, snr = GS_SNR_NA;
+            HAL_StatusTypeDef rx_st = LoRaE80_ReadPacket(s_e80buf, &el, &rssi, &snr);
+            if (rx_st == HAL_OK) {
+                for (uint8_t i = 0; i < el; i++) {
+                    uint8_t crc_ok = 0;
+                    if (TelemRx_FeedAny(&s_rx920, s_e80buf[i], &pkt, &crc_ok)) {
+                        if (crc_ok) {
+                            gs_handle_packet(GS_LINK_920, &pkt, rssi, snr);
+                        } else {
+                            printf("[GS_PKT?] link:920MHz CRC_BAD rssi:%d snr:%d seq:%u fsm:%u alt:%dcm baro:%dcm bat:%dmV\r\n",
+                                   (int)rssi, (int)snr, (unsigned)pkt.seq, (unsigned)pkt.fsm_state,
+                                   (int)pkt.ekf_pos_z_cm, (int)pkt.baro_alt_cm, (unsigned)pkt.bat_mv);
+                        }
+                    }
+                }
+            } else if (rx_st == HAL_ERROR) {
+                /* CRC/header 錯誤：記入統計 */
+                GsLoraTest_UpdateStats(GS_LINK_920, GS_RSSI_NA, GS_SNR_NA, 0 /* crc_err */);
+            }
+        }
+
+        /* UART2 命令處理（地面站通訊測試） */
+        GsLoraTest_Tick();
+
+        /* 每 1 秒 (1Hz) 即時回報地面站自身 GPS 定位、座標與海拔 */
+        static uint32_t s_last_gps_report_tick = 0;
+        uint32_t now_tick = HAL_GetTick();
+        if (now_tick - s_last_gps_report_tick >= 1000U) {
+            s_last_gps_report_tick = now_tick;
+            char lat_sign = (g->lat_1e6 < 0) ? '-' : '+';
+            char lon_sign = (g->lon_1e6 < 0) ? '-' : '+';
+            uint32_t lat_abs = (g->lat_1e6 < 0) ? (uint32_t)(-g->lat_1e6) : (uint32_t)g->lat_1e6;
+            uint32_t lon_abs = (g->lon_1e6 < 0) ? (uint32_t)(-g->lon_1e6) : (uint32_t)g->lon_1e6;
+            if (g->fix_valid) {
+                printf("[GS_GPS] FIX sats=%u Pos:%c%lu.%06lu,%c%lu.%06lu Alt:%dm\r\n",
+                       (unsigned)g->satellites,
+                       lat_sign, (unsigned long)(lat_abs / 1000000U), (unsigned long)(lat_abs % 1000000U),
+                       lon_sign, (unsigned long)(lon_abs / 1000000U), (unsigned long)(lon_abs % 1000000U),
+                       (int)g->altitude_m);
+            } else {
+                printf("[GS_GPS] SEARCHING sats=%u q=%u ok=%lu err=%lu\r\n",
+                       (unsigned)g->satellites, (unsigned)g->fix_quality, (unsigned long)g->sentences_ok, (unsigned long)g->sentences_err);
+            }
+        }
+
+        /* 每 2 秒回報雙鏈路通訊狀態（bring-up 診斷用）：
+         *   433: raw=原始位元組數 / ok=完整封包 / crc=湊滿但CRC錯 / rsync=找sync退回次數
+         *   解讀：raw=0 → 完全沒收到(通道不符/接線/未進RX)；raw↑ 但 ok=0 且 rsync↑ → 空中速率不符(雜訊)；
+         *         crc↑ → 速率對但有誤碼(訊號弱/部分)；ok↑ → 正常。 */
+        static uint32_t s_last_stat_report_tick = 0;
+        if (now_tick - s_last_stat_report_tick >= 2000U) {
+            s_last_stat_report_tick = now_tick;
+            printf("[GS_STAT] HW:433=%s 920=%s | 433 raw=%lu ok=%lu crc=%lu rsync=%lu | 920 ok=%lu crc=%lu rsync=%lu | pkts 433=%lu 920=%lu\r\n",
+                   lora433_ok ? "OK" : "OFF", lora920_ok ? "OK" : "OFF",
+                   (unsigned long)s_u3_rx_bytes,
+                   (unsigned long)s_rx433.ok, (unsigned long)s_rx433.crc_err, (unsigned long)s_rx433.resync,
+                   (unsigned long)s_rx920.ok, (unsigned long)s_rx920.crc_err, (unsigned long)s_rx920.resync,
+                   (unsigned long)s_stat_433_cnt, (unsigned long)s_stat_920_cnt);
+        }
+
+        /* 指示燈：心跳 / GPS fix / 接收活動 */
+        gs_leds_update(now_tick, g->fix_valid);
+
+        HAL_IWDG_Refresh(&hiwdg);
+        osDelay(GS_POLL_DELAY_MS);
+    }
+#endif /* GS_USB_SELFTEST */
+}
+
+#endif /* IS_GROUND */

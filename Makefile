@@ -15,14 +15,14 @@ GCC_PATH        := $(shell ls -d $(CUBEIDE_PLUGINS)/com.st.stm32cube.ide.mcu.ext
 CUBEPROG        := $(shell ls $(CUBEIDE_PLUGINS)/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*/tools/bin/STM32_Programmer_CLI 2>/dev/null | sort -V | tail -1)
 
 # ---- Project paths ----
-BUILD_DIR  := Main_Code/Debug
+BUILD_DIR  := firmware/main_flight_code/Debug
 ELF        := $(BUILD_DIR)/Main_AV_F407.elf
 BACKUP_ELF := $(BUILD_DIR)/Main_AV_F407_backup.elf
 GROUND_ELF := $(BUILD_DIR)/Main_AV_F407_ground.elf
-BOARD_CFG  := Main_Code/Core/Inc/board_config.h
+BOARD_CFG  := firmware/main_flight_code/Core/Inc/board_config.h
 
 # ---- 版本標頭（開機橫幅顯示 git 版次 + 建置時間；語意化版號在 board_config.h::FIRMWARE_VERSION）----
-VERSION_HDR := Main_Code/Core/Inc/build_version.h
+VERSION_HDR := firmware/main_flight_code/Core/Inc/build_version.h
 FW_GIT      := $(shell git -C "$(CURDIR)" describe --tags --always --dirty 2>/dev/null || echo nogit)
 FW_BUILD    := $(shell date '+%Y-%m-%d_%H:%M:%S')
 
@@ -33,7 +33,7 @@ BAUD      := 460800
 
 # ============================================================
 
-.PHONY: build build-primary build-backup build-ground flash flash-primary flash-backup flash-ground monitor all clean host-test gen-version
+.PHONY: build build-primary build-backup build-ground flash flash-primary flash-backup flash-ground flash-primary-only flash-ground-only monitor all clean host-test gen-version
 
 ## 產生版本標頭（git 版次 + 建置時間），供開機橫幅顯示；每次建置前自動更新。
 gen-version:
@@ -59,21 +59,21 @@ build-primary: gen-version
 	@test -n "$(GCC_PATH)" || (echo "STM32CubeIDE 工具鏈未找到，請確認已安裝 STM32CubeIDE"; exit 1)
 	@sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_PRIMARY   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"
 	@echo "[build-primary] BOARD_ROLE = ROLE_PRIMARY"
-	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) clean && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
+	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
 	  sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_PRIMARY   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"; touch "$(BOARD_CFG)"; \
 	  if [ $$STATUS -ne 0 ]; then echo "[build-primary] 建置失敗"; exit $$STATUS; fi
 
 ## 燒錄主航電 binary
 flash-primary: build-primary
 	@test -n "$(CUBEPROG)" || (echo "STM32_Programmer_CLI 未找到，請確認已安裝 STM32CubeIDE"; exit 1)
-	"$(CUBEPROG)" -c port=SWD -w "$(CURDIR)/$(ELF)" -rst
+	"$(CUBEPROG)" -c port=SWD mode=UR -w "$(CURDIR)/$(ELF)" -rst
 
 ## 編譯備援航電（BOARD_ROLE=ROLE_BACKUP）
 build-backup: gen-version
 	@test -n "$(GCC_PATH)" || (echo "STM32CubeIDE 工具鏈未找到，請確認已安裝 STM32CubeIDE"; exit 1)
 	@sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_BACKUP   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"
 	@echo "[build-backup] BOARD_ROLE = ROLE_BACKUP"
-	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) clean && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
+	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
 	  sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_PRIMARY   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"; touch "$(BOARD_CFG)"; \
 	  if [ $$STATUS -ne 0 ]; then echo "[build-backup] 建置失敗"; exit $$STATUS; fi
 	@cp "$(ELF)" "$(BACKUP_ELF)" && echo "[build-backup] -> $(BACKUP_ELF)"
@@ -81,14 +81,14 @@ build-backup: gen-version
 ## 燒錄備援航電 binary（會先 build-backup）
 flash-backup: build-backup
 	@test -n "$(CUBEPROG)" || (echo "STM32_Programmer_CLI 未找到，請確認已安裝 STM32CubeIDE"; exit 1)
-	"$(CUBEPROG)" -c port=SWD -w "$(CURDIR)/$(BACKUP_ELF)" -rst
+	"$(CUBEPROG)" -c port=SWD mode=UR -w "$(CURDIR)/$(BACKUP_ELF)" -rst
 
 ## 編譯地面站（BOARD_ROLE=ROLE_GROUND）
 build-ground: gen-version
 	@test -n "$(GCC_PATH)" || (echo "STM32CubeIDE 工具鏈未找到，請確認已安裝 STM32CubeIDE"; exit 1)
 	@sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_GROUND   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"
 	@echo "[build-ground] BOARD_ROLE = ROLE_GROUND"
-	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) clean && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
+	@export PATH="$(GCC_PATH):$$PATH" && $(MAKE) -C $(BUILD_DIR) all; STATUS=$$?; \
 	  sed -i '' 's|ROLE_[A-Z]*   /\* MAKE_ROLE_LINE|ROLE_PRIMARY   /* MAKE_ROLE_LINE|' "$(BOARD_CFG)"; touch "$(BOARD_CFG)"; \
 	  if [ $$STATUS -ne 0 ]; then echo "[build-ground] 建置失敗"; exit $$STATUS; fi
 	@cp "$(ELF)" "$(GROUND_ELF)" && echo "[build-ground] -> $(GROUND_ELF)"
@@ -96,7 +96,18 @@ build-ground: gen-version
 ## 燒錄地面站 binary（會先 build-ground）
 flash-ground: build-ground
 	@test -n "$(CUBEPROG)" || (echo "STM32_Programmer_CLI 未找到，請確認已安裝 STM32CubeIDE"; exit 1)
-	"$(CUBEPROG)" -c port=SWD -w "$(CURDIR)/$(GROUND_ELF)" -rst
+	"$(CUBEPROG)" -c port=SWD mode=UR -w "$(CURDIR)/$(GROUND_ELF)" -rst
+
+## 僅燒錄主航電 binary（不重新編譯，直接燒錄現有 ELF）
+flash-primary-only:
+	@test -n "$(CUBEPROG)" || (echo "STM32_Programmer_CLI 未找到，請確認已安裝 STM32CubeIDE"; exit 1)
+	"$(CUBEPROG)" -c port=SWD mode=UR -w "$(CURDIR)/$(ELF)" -rst
+
+## 僅燒錄地面站 binary（不重新編譯，直接燒錄現有 ELF）
+flash-ground-only:
+	@test -n "$(CUBEPROG)" || (echo "STM32_Programmer_CLI 未找到，請確認已安裝 STM32CubeIDE"; exit 1)
+	"$(CUBEPROG)" -c port=SWD mode=UR -w "$(CURDIR)/$(GROUND_ELF)" -rst
+
 
 ## Open serial monitor (auto-detect USB serial port; quit with Ctrl+A then K)
 ## 自動偵測序列埠（FTDI/CP210x/CH340/CDC）；可用 `make monitor PORT=/dev/cu.xxx` 覆寫
