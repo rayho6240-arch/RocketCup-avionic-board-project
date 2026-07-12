@@ -10,7 +10,10 @@
 # ============================================================
 
 # ---- Toolchain (STM32CubeIDE built-in, must NOT use Homebrew version) ----
-CUBEIDE_PLUGINS := /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins
+# 可在專案根目錄建立 local.mk 設定本地路徑，例如 CUBEIDE_PLUGINS := /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins
+-include local.mk
+
+CUBEIDE_PLUGINS ?= /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins
 GCC_PATH        := $(shell ls -d $(CUBEIDE_PLUGINS)/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin 2>/dev/null | sort -V | tail -1)
 CUBEPROG        := $(shell ls $(CUBEIDE_PLUGINS)/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*/tools/bin/STM32_Programmer_CLI 2>/dev/null | sort -V | tail -1)
 

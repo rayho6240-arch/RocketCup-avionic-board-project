@@ -11,19 +11,19 @@
 我們採用結構化、模組化的資料夾配置。請在您負責的子專案資料夾內開發，並參考對應的規格書：
 
 ### 1️⃣ 核心開發專案 (由 Git 進行版本控制)
-* **[BigAvionic/](file:///Users/laizhiquan/coding/RocketCom/BigAvionic)**: 大火箭航電主板專區 (內附 `備注.md` 進度檔)。
-* **[Deployment board/](file:///Users/laizhiquan/coding/RocketCom/Deployment%20board)**: 降落與開傘部署板專區 (內附 `備注.md` 進度檔)。
-* **[GroundStation/](file:///Users/laizhiquan/coding/RocketCom/GroundStation)**: 地面接收站專區 (內附 `備注.md` 進度檔)。
-* **[SmallAvionic/](file:///Users/laizhiquan/coding/RocketCom/SmallAvionic)**: 小火箭航電備份板專區 (包含 Joyce、Ray、Tank、Tony 的開發分支，內附 `備注.md` 進度檔)。
-* **[Lib/](file:///Users/laizhiquan/coding/RocketCom/Lib)**: 共用的核心 KiCad 零件庫 (Symbol & Footprint)。
+* **[hardware/big_avionic/](hardware/big_avionic/)**: 大火箭航電主板專區 (內附 `備注.md` 進度檔)。
+* **[hardware/deployment_board/](hardware/deployment_board/)**: 降落與開傘部署板專區 (內附 `備注.md` 進度檔)。
+* **[hardware/ground_station/](hardware/ground_station/)**: 地面接收站專區 (內附 `備注.md` 進度檔)。
+* **[hardware/small_avionic/](hardware/small_avionic/)**: 小火箭航電備份板專區 (包含 Joyce、Ray、Tank、Tony 的開發分支，內附 `備注.md` 進度檔)。
+* **[hardware/libraries/](hardware/libraries/)**: 共用的核心 KiCad 零件庫 (Symbol & Footprint)。
 
 > 📌 **開發小筆記**：每個開發資料夾下都有一個 **`備注.md`**。請在裡面記錄您的設計要點、遇到的 Bug，並隨著開發勾選進度 Checkbox，讓其他組員知道目前的開發狀況！
 
 ### 2️⃣ 整理後的硬體參考資料 (建議在本地參考，不頻繁變動)
-* **[Datasheets/](file:///Users/laizhiquan/coding/RocketCom/Datasheets)**: 收納了 13 個重命名後的 PDF 規格書與硬體指南，標註了晶片型號與硬體用途（如：`ADXL375_High_G_Accelerometer_Datasheet.pdf`），一目了然！
-* **[Libraries/](file:///Users/laizhiquan/coding/RocketCom/Libraries)**: 收納了參考用的 KiCad 零件庫壓縮檔與解壓資料夾（如 `ul_*` 庫）。
-* **[Documents/](file:///Users/laizhiquan/coding/RocketCom/Documents)**: 存放 PDR 簡報、競賽評分表以及系統繪圖檔。
-* **[ReferenceSchematics/](file:///Users/laizhiquan/coding/RocketCom/ReferenceSchematics)**: 存放獨立的 `Telemetry_KiCAD_Project.kicad_sch` 參考電路圖。
+* **[Datasheets/](Datasheets/)**: 收納了 13 個重命名後的 PDF 規格書與硬體指南，標註了晶片型號與硬體用途（如：`ADXL375_High_G_Accelerometer_Datasheet.pdf`），一目了然！
+* **[hardware/libraries/](hardware/libraries/)**: 收納了參考用的 KiCad 零件庫壓縮檔與解壓資料夾（如 `ul_*` 庫）。
+* **[documentation/](documentation/)**: 存放 PDR 簡報、競賽評分表以及系統繪圖檔。
+* **[hardware/ground_station/](hardware/ground_station/)**: 存放地面站電路圖。
 
 ---
 
@@ -36,8 +36,8 @@
 * **[docs/](docs/README.md)**：工程／規劃文件索引（硬體規格表、改進計劃、進度、設計筆記、需求驗證、測試方法）。
 
 > **韌體建置請以頂層 [`Makefile`](Makefile) 為準**：`make`（主航電）、`make build-backup`（備援）、`make build-ground`（地面站）、`make host-test`（純邏輯測試）。
-> 工具鏈**必須使用 STM32CubeIDE 內建的 arm-none-eabi gcc**（Makefile 會自動偵測），**請勿使用 Homebrew 版**。
-> 注意：航電專案目錄已由 `Main_AV_F407` 更名為 `Main_Code`；本文件下方早期撰寫的「VS Code / Homebrew」段落僅供歷史參考，現行建置一律以頂層 `Makefile` 與 `教學/教學_6_24.md` 第 11 節為準。
+> 工具鏈**必須使用 STM32CubeIDE 內建的 arm-none-eabi gcc**（Makefile 會優先讀取 `local.mk` 自訂路徑，無設定則自動偵測 macOS 預設路徑），**請勿使用 Homebrew 版**。
+> 注意：航電專案目錄已更名為 `firmware/main_flight_code`；本文件下方早期撰寫的「VS Code / Homebrew」段落僅供歷史參考，現行建置一律以頂層 `Makefile` 與 `教學/教學_6_24.md` 第 11 節為準。
 
 ---
 
@@ -110,14 +110,14 @@ Git 很擅長合併程式碼，但**非常不擅長合併二進位/圖形化的 
 
 ## 🛠️ 輕量化 STM32 開發與編譯指南 (VS Code / Antigravity IDE)
 
-日常編碼、編譯與燒錄**不需要每次打開重型的 STM32CubeIDE**：在 VS Code / Antigravity IDE 的終端機，直接呼叫**倉庫根目錄的頂層 [`Makefile`](Makefile)**，即可完成主控專案 [Main_Code](file:///Users/laizhiquan/coding/RocketCom/Main_Code/) 的極速編譯與燒錄。
+日常編碼、編譯與燒錄**不需要每次打開重型的 STM32CubeIDE**：在 VS Code / Antigravity IDE 的終端機，直接呼叫**倉庫根目錄的頂層 [`Makefile`](Makefile)**，即可完成主控專案 [firmware/main_flight_code/](firmware/main_flight_code/) 的極速編譯與燒錄。
 
-### 1️⃣ 工具鏈 (Toolchain)：用 STM32CubeIDE 內建的，**不要**用 Homebrew
+### 1️⃣ 工具鏈 (Toolchain)：支援使用者自訂本地路徑
 本專案**必須使用 STM32CubeIDE 內建的 `arm-none-eabi` gcc 與 `STM32_Programmer_CLI`**，**請勿**用 `brew install` 安裝任何 ARM GCC（例如 `gcc-arm-none-eabi`）——版本不同會造成連結或燒錄問題。
 
-* 你**只需要安裝 STM32CubeIDE**（之後不必每次開啟它）；頂層 `Makefile` 第 12–15 行會自動從
-  `…/STM32CubeIDE.app/…/plugins/` 偵測 gcc 與 `STM32_Programmer_CLI` 的路徑，編譯／燒錄時自動帶入 `PATH`。
-* 若出現「STM32CubeIDE 工具鏈未找到」錯誤，代表 CubeIDE 未安裝或路徑不符，請先安裝 STM32CubeIDE。
+* **本地路徑自訂**：預設使用 macOS 系統路徑。若您在非 macOS 系統（Windows/Linux）或安裝在其他路徑，**請複製 `local.mk.example` 並重新命名為 `local.mk`**，在裡面自訂您的 `CUBEIDE_PLUGINS` 路徑。
+* `local.mk` 已經在 `.gitignore` 中設定忽略，不會被提交上傳，保障每位開發者可以使用本機專屬的編譯路徑。
+* 頂層 `Makefile` 會自動從 `local.mk`（或預設路徑）載入工具鏈，編譯／燒錄時自動帶入 `PATH`。
 
 > 📌 此為現行唯一正確的工具鏈規範，詳見 [`教學/教學_6_24.md`](教學/教學_6_24.md) 第 11 節與頂層 [`Makefile`](Makefile)。
 
@@ -132,7 +132,7 @@ make host-test     # 純邏輯主機端測試（免上板）
 make clean         # 清除建置產物
 ```
 
-編譯成功後，產物在 `Main_Code/Debug/` 下（皆已被 `.gitignore` 忽略，不佔倉庫）：
+編譯成功後，產物在 `firmware/main_flight_code/Debug/` 下（皆已被 `.gitignore` 忽略，不佔倉庫）：
 * **`Main_AV_F407.elf`** — 主航電的除錯／燒錄檔（即頂層 `Makefile` 的 `ELF` 變數）
 * 連帶產生 `Main_AV_F407.bin`、`Main_AV_F407.list`、`Main_AV_F407.map`
 * `Main_AV_F407_backup.elf` / `Main_AV_F407_ground.elf` — 備援／地面站變體（由 `build-backup` / `build-ground` 產生）
@@ -148,7 +148,7 @@ make all            # 等同 flash + monitor
 
 若偏好在 IDE 內單步除錯，可安裝 **Cortex-Debug** 擴充套件，並在 `.vscode/launch.json` 中配置 ST-Link 除錯器，即可按 **F5** 一鍵燒錄與中斷點除錯。
 
-*(註：若你未來在 `.ioc` 中新增或修改了硬體引腳，請打開 `Main_Code/Main_AV_F407.ioc` 點擊儲存重新 Generate；其餘日常編碼、編譯與燒錄皆可在本 IDE 終端機以上述 `make` 指令快速完成。)*
+*(註：若你未來在 `.ioc` 中新增或修改了硬體引腳，請打開 `firmware/main_flight_code/Main_AV_F407.ioc` 點擊儲存重新 Generate；其餘日常編碼、編譯與燒錄皆可在本 IDE 終端機以上述 `make` 指令快速完成。)*
 
 ---
 

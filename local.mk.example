@@ -1,0 +1,14 @@
+# ====================================================================
+#  Local Build Configurations (git-ignored)
+#  Copy this file to 'local.mk' and customize paths for your machine.
+# ====================================================================
+
+# Path to STM32CubeIDE plugins directory.
+# Defaults to the standard macOS installation if not specified.
+#
+# Examples:
+# macOS:     CUBEIDE_PLUGINS := /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins
+# Linux:     CUBEIDE_PLUGINS := /opt/st/stm32cubeide/plugins
+# Windows:   CUBEIDE_PLUGINS := C:/ST/STM32CubeIDE_1.13.0/STM32CubeIDE/plugins
+#
+# CUBEIDE_PLUGINS := /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins
