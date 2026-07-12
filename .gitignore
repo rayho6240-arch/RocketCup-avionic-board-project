@@ -89,6 +89,9 @@ tests/test_*
 !tests/test_*.c
 !tests/test_*.h
 
-# Makefile 自動產生的版本標頭（每次建置更新，不納版控）
-Main_Code/Core/Inc/build_version.h
-Main_Code/Core/Inc/board_config.h.rolebak
+# --- 本地自訂編譯路徑設定檔 ---
+local.mk
+
+# Makefile 自動產生的版本標頭與備份檔（每次建置更新，不納版控）
+firmware/main_flight_code/Core/Inc/build_version.h
+firmware/main_flight_code/Core/Inc/board_config.h.rolebak
