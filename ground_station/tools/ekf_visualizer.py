@@ -19,6 +19,8 @@ except ImportError as e:
     print("Please install them using: pip install pyserial matplotlib")
     sys.exit(1)
 
+import os
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import serial_link   # P3：port/baud 預設與自動偵測統一於此
 
 # Regex to parse the [TELE] telemetry lines

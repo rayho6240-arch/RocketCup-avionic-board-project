@@ -228,6 +228,8 @@ def serial_reader_task(port):
                         current_fsm_state = "STATE_BOOST"
                     elif "BURNOUT" in line:
                         current_fsm_state = "STATE_COAST"
+                    elif "DEPLOY_DROGUE" in line:
+                        current_fsm_state = "STATE_DEPLOY_DROGUE"
                     elif "APOGEE" in line:
                         current_fsm_state = "STATE_APOGEE"
                     elif "LANDED" in line:
@@ -575,7 +577,7 @@ def main():
                 status_text.get_bbox_patch().set_edgecolor('#ff3b30')
             elif fsm_lbl == "STATE_COAST":
                 status_text.get_bbox_patch().set_edgecolor('#ffcc00')
-            elif fsm_lbl in ["STATE_APOGEE", "STATE_RECOVERY", "STATE_MAIN_DEPLOY"]:
+            elif fsm_lbl in ["STATE_DEPLOY_DROGUE", "STATE_APOGEE", "STATE_DESCENT", "STATE_MAIN_DEPLOY"]:
                 status_text.get_bbox_patch().set_edgecolor('#28a745')
             elif fsm_lbl == "STATE_LANDED":
                 status_text.get_bbox_patch().set_edgecolor('#ffffff')

@@ -33,18 +33,21 @@ except ImportError:
     import serial
     import serial.tools.list_ports
 
+# Add parent directory to sys.path to load serial_link
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+
 import serial_link   # Unified serial utility
 
-# FSM state code to string and colors
+# FSM state code to string and colors (aligned with firmware FSM enum)
 FSM_STATES = {
     0: ("INIT/BOOT", "#8E8D8A"),
     1: ("PREFLIGHT/PAD", "#9E9E9E"),
     2: ("BOOST", "#FF5722"),
     3: ("COAST", "#FFC107"),
-    4: ("DROGUE", "#00BCD4"),
-    5: ("MAIN", "#2196F3"),
-    6: ("LANDED", "#4CAF50"),
-    7: ("ABNORMAL", "#E91E63")
+    4: ("APOGEE/DROGUE", "#00BCD4"),
+    5: ("DESCENT", "#A8DADC"),
+    6: ("MAIN_DEPLOY", "#2196F3"),
+    7: ("LANDED", "#4CAF50")
 }
 
 class GroundMonitorGUI:
@@ -61,6 +64,13 @@ class GroundMonitorGUI:
         self.ser = None
         self.rx_thread = None
         self.data_queue = queue.Queue()
+
+        # Device auto-detect state
+        self.device_role = "AUTO"  # "AUTO", "GROUND", or "AVIONICS"
+        self.cpu_main = "0.0"
+        self.cpu_ekf = "0.0"
+        self.sensor_health_bits = 0
+        self.ekf_health_bits = 0
 
         # Telemetry parsing state
         self.rocket_state = {
@@ -139,7 +149,7 @@ class GroundMonitorGUI:
         top_bar.pack(fill="x", side="top")
 
         ttk.Label(top_bar, text="序列埠:").pack(side="left", padx=5)
-        self.cb_port = ttk.Combobox(top_bar, textvariable=self.serial_port, width=25, state="readonly")
+        self.cb_port = ttk.Combobox(top_bar, textvariable=self.serial_port, width=25, state="normal")
         self.cb_port.pack(side="left", padx=5)
 
         btn_refresh = tk.Button(top_bar, text="整理", bg="#2D2D2D", fg="#EEEEEE", relief="flat", command=self.refresh_ports)
@@ -154,6 +164,9 @@ class GroundMonitorGUI:
 
         self.lbl_status = ttk.Label(top_bar, text="未連線", foreground="#E91E63", font=("Arial", 10, "bold"))
         self.lbl_status.pack(side="left", padx=5)
+
+        self.lbl_role = ttk.Label(top_bar, text="連接設備: 自動偵測中...", foreground="#FFC107", font=("Arial", 10, "bold"))
+        self.lbl_role.pack(side="left", padx=15)
 
         # 2. 中部儀表板卡片區
         dash_frame = ttk.Frame(self.root, padding=10)
@@ -185,7 +198,7 @@ class GroundMonitorGUI:
         
         ttk.Label(log_frame, text="地面站調試日誌 (調試串口輸出):", font=("Arial", 9, "bold")).pack(anchor="w", pady=2)
         
-        self.txt_console = ScrolledText(log_frame, bg="#0E0E0E", fg="#CCCCCC", font=("Courier New", 9.5), insertbackground="white", relief="flat")
+        self.txt_console = ScrolledText(log_frame, bg="#0E0E0E", fg="#CCCCCC", font=("Courier New", 10), insertbackground="white", relief="flat")
         self.txt_console.pack(fill="both", expand=True)
 
         # Setup Tag Highlight colors
@@ -209,10 +222,10 @@ class GroundMonitorGUI:
         lbl_sub = ttk.Label(card, text="--", style="CardSub.TLabel")
         lbl_sub.pack(anchor="w", pady=2)
 
-        return {"frame": card, "val": lbl_val, "sub": lbl_sub}
+        return {"frame": card, "title": lbl_title, "val": lbl_val, "sub": lbl_sub}
 
     def refresh_ports(self):
-        ports = serial_link.list_serial_ports()
+        ports = serial_link.list_candidate_ports()
         self.cb_port['values'] = ports
         if ports:
             # Prefer USB Serial ports
@@ -249,6 +262,8 @@ class GroundMonitorGUI:
 
     def disconnect_serial(self):
         self.is_connected = False
+        self.device_role = "AUTO"
+        self.lbl_role.config(text="連接設備: 自動偵測中...", foreground="#FFC107")
         if self.ser and self.ser.is_open:
             self.ser.close()
         self.btn_connect.config(text="連線", bg="#00ADB5")
@@ -290,6 +305,17 @@ class GroundMonitorGUI:
 
             # Parse line by pattern matching
             tag = None
+            
+            # --- Device Role Auto-detection ---
+            if self.device_role == "AUTO":
+                if any(x in line for x in ["[GS_PKT]", "[GS_STAT]", "[GS_GPS]", "ROLE=ROLE_GROUND"]):
+                    self.device_role = "GROUND"
+                    self.lbl_role.config(text="連接設備: 地面站接收端", foreground="#00ADB5")
+                elif any(x in line for x in ["[TELE]", "[RATE]", "[CPU]", "[GPS]", "[HEALTH]", "ROLE=ROLE_PRIMARY", "ROLE=ROLE_BACKUP"]):
+                    self.device_role = "AVIONICS"
+                    self.lbl_role.config(text="連接設備: 航電板 (直連)", foreground="#4CAF50")
+
+            # --- Ground Station Mode parsing ---
             if "[GS_PKT]" in line:
                 tag = "GS_PKT"
                 self.parse_gs_pkt(line)
@@ -302,6 +328,92 @@ class GroundMonitorGUI:
             elif "[GS_GPS]" in line:
                 tag = "GS_GPS"
                 self.parse_gs_gps(line)
+
+            # --- Direct Avionics Mode parsing ---
+            elif "[TELE]" in line:
+                tag = "GS_PKT"
+                m_pos = re.search(r"pos:(-?[\d\.]+),(-?[\d\.]+),(-?[\d\.]+)", line)
+                if m_pos:
+                    self.rocket_state["alt_m"] = float(m_pos.group(3))
+                    self.rocket_state["last_pkt_time"] = time.time()
+            elif "[GPS]" in line:
+                tag = "GS_GPS"
+                m_gps = re.search(r"fix:(\d+)\s+q:\d+\s+sat:(\d+)", line)
+                if m_gps:
+                    self.rocket_state["gps_fix"] = int(m_gps.group(1))
+                    self.rocket_state["gps_sats"] = int(m_gps.group(2))
+                    self.rocket_state["last_pkt_time"] = time.time()
+            elif "[IMU]" in line:
+                tag = "INFO"
+                if self.device_role == "AVIONICS":
+                    m_imu = re.search(r"a\[mG\]:(-?\d+),(-?\d+),(-?\d+)", line)
+                    if m_imu:
+                        self.rocket_state["ax_g"] = float(m_imu.group(1)) / 1000.0
+                        self.rocket_state["ay_g"] = float(m_imu.group(2)) / 1000.0
+                        self.rocket_state["az_g"] = float(m_imu.group(3)) / 1000.0
+                        self.rocket_state["accel_mag"] = math.sqrt(self.rocket_state["ax_g"]**2 + self.rocket_state["ay_g"]**2 + self.rocket_state["az_g"]**2)
+                        self.rocket_state["last_pkt_time"] = time.time()
+            elif "[HIGHG]" in line:
+                tag = "INFO"
+                if self.device_role == "AVIONICS":
+                    m_hg = re.search(r"a\[mG\]:(-?\d+),(-?\d+),(-?\d+)", line)
+                    if m_hg:
+                        self.rocket_state["ax_g"] = float(m_hg.group(1)) / 1000.0
+                        self.rocket_state["ay_g"] = float(m_hg.group(2)) / 1000.0
+                        self.rocket_state["az_g"] = float(m_hg.group(3)) / 1000.0
+                        self.rocket_state["accel_mag"] = math.sqrt(self.rocket_state["ax_g"]**2 + self.rocket_state["ay_g"]**2 + self.rocket_state["az_g"]**2)
+                        self.rocket_state["last_pkt_time"] = time.time()
+            elif "[HEALTH]" in line:
+                tag = "GS_STAT"
+                m_fsm = re.search(r"fsm=(\d+)", line)
+                if m_fsm:
+                    self.rocket_state["fsm"] = int(m_fsm.group(1))
+                    self.rocket_state["last_pkt_time"] = time.time()
+                m_health = re.search(r"sens=0x([0-9A-Fa-f]+)\s+ekf=0x([0-9A-Fa-f]+)", line)
+                if m_health:
+                    self.sensor_health_bits = int(m_health.group(1), 16)
+                    self.ekf_health_bits = int(m_health.group(2), 16)
+            elif "[FSM]" in line:
+                tag = "INFO"
+                m_state = re.search(r"Entering (STATE_[A-Z_]+)", line)
+                if m_state:
+                    state_name = m_state.group(1)
+                    name_to_code = {
+                        "STATE_INIT": 0, "STATE_PAD": 1, "STATE_BOOST": 2, "STATE_COAST": 3,
+                        "STATE_APOGEE": 4, "STATE_DESCENT": 5, "STATE_MAIN_DEPLOY": 6, "STATE_LANDED": 7
+                    }
+                    if state_name in name_to_code:
+                        self.rocket_state["fsm"] = name_to_code[state_name]
+                        self.rocket_state["last_pkt_time"] = time.time()
+                elif "LIFTOFF" in line:
+                    self.rocket_state["fsm"] = 2
+                    self.rocket_state["last_pkt_time"] = time.time()
+                elif "BURNOUT" in line:
+                    self.rocket_state["fsm"] = 3
+                    self.rocket_state["last_pkt_time"] = time.time()
+                elif "APOGEE" in line or "DROGUE" in line:
+                    self.rocket_state["fsm"] = 5  # DESCENT
+                    self.rocket_state["last_pkt_time"] = time.time()
+                elif "MAIN" in line and "deployed" in line:
+                    self.rocket_state["fsm"] = 6
+                    self.rocket_state["last_pkt_time"] = time.time()
+                elif "TOUCHDOWN" in line:
+                    self.rocket_state["fsm"] = 7
+                    self.rocket_state["last_pkt_time"] = time.time()
+            elif "[CPU]" in line:
+                tag = "INFO"
+                m_cpu = re.search(r"MainTask\+ISR:([\d\.]+)%,\s*EKFTask:([\d\.]+)%", line)
+                if m_cpu:
+                    self.cpu_main = m_cpu.group(1)
+                    self.cpu_ekf = m_cpu.group(2)
+            elif "," in line and not line.startswith("["):
+                parts = line.split(',')
+                if len(parts) == 9:
+                    try:
+                        self.rocket_state["baro_m"] = float(parts[8]) / 100.0
+                        self.rocket_state["last_pkt_time"] = time.time()
+                    except ValueError:
+                        pass
 
             # Insert into terminal scrolling box
             self.txt_console.insert(tk.END, log_line, tag)
@@ -461,7 +573,10 @@ class GroundMonitorGUI:
             self.card_gps["sub"].config(text="衛星數量: --")
 
         # 6. LoRa Link quality
-        if self.rocket_state["last_pkt_time"] and time.time() - self.rocket_state["last_pkt_time"] <= 2.0:
+        if self.device_role == "AVIONICS":
+            self.card_link["val"].config(text="N/A", foreground="#888888")
+            self.card_link["sub"].config(text="工作鏈路: 直連偵錯串口")
+        elif self.rocket_state["last_pkt_time"] and time.time() - self.rocket_state["last_pkt_time"] <= 2.0:
             rssi = self.rocket_state["rssi"]
             link_color = "#4CAF50" if rssi >= -70 else ("#FFC107" if rssi >= -95 else "#E91E63")
             self.card_link["val"].config(text=f"{rssi} dBm", foreground=link_color)
@@ -470,29 +585,55 @@ class GroundMonitorGUI:
             self.card_link["val"].config(text="--", foreground="#888888")
             self.card_link["sub"].config(text="--")
 
-        # 7. Ground Station Local GPS
-        if self.gs_state["gps_fix"]:
-            self.card_gs_gps["val"].config(text="● 已定位", foreground="#4CAF50")
-            self.card_gs_gps["sub"].config(text=f"sats:{self.gs_state['gps_sats']}  H:{self.gs_state['gps_alt']}m  GPS時鐘同步中")
+        # 7. Ground Station Local GPS or Avionics CPU Load
+        if self.device_role == "AVIONICS":
+            self.card_gs_gps["title"].config(text="航電板 CPU 負載")
+            self.card_gs_gps["val"].config(text=f"Main: {self.cpu_main}%", foreground="#00ADB5")
+            self.card_gs_gps["sub"].config(text=f"EKF Task: {self.cpu_ekf}%")
         else:
-            gs_gps_text = "○ 搜星中" if self.gs_state["gps_sats"] > 0 else "○ 無訊號"
-            # If ok=0 and err=0, meaning no serial packets at all
-            if self.gs_state["gps_ok"] == 0 and self.gs_state["gps_err"] == 0:
-                gs_gps_text = "⚠ 硬體斷線"
-                self.card_gs_gps["val"].config(text=gs_gps_text, foreground="#E91E63")
-                self.card_gs_gps["sub"].config(text="PC7 RX 未接線或無供電")
+            self.card_gs_gps["title"].config(text="地面站本機 GPS")
+            if self.gs_state["gps_fix"]:
+                self.card_gs_gps["val"].config(text="● 已定位", foreground="#4CAF50")
+                self.card_gs_gps["sub"].config(text=f"sats:{self.gs_state['gps_sats']}  H:{self.gs_state['gps_alt']}m  GPS時鐘同步中")
             else:
-                self.card_gs_gps["val"].config(text=gs_gps_text, foreground="#FFC107")
-                self.card_gs_gps["sub"].config(text=f"sats:{self.gs_state['gps_sats']}  ok:{self.gs_state['gps_ok']}  err:{self.gs_state['gps_err']}")
+                gs_gps_text = "○ 搜星中" if self.gs_state["gps_sats"] > 0 else "○ 無訊號"
+                # If ok=0 and err=0, meaning no serial packets at all
+                if self.gs_state["gps_ok"] == 0 and self.gs_state["gps_err"] == 0:
+                    gs_gps_text = "⚠ 硬體斷線"
+                    self.card_gs_gps["val"].config(text=gs_gps_text, foreground="#E91E63")
+                    self.card_gs_gps["sub"].config(text="PC7 RX 未接線或無供電")
+                else:
+                    self.card_gs_gps["val"].config(text=gs_gps_text, foreground="#FFC107")
+                    self.card_gs_gps["sub"].config(text=f"sats:{self.gs_state['gps_sats']}  ok:{self.gs_state['gps_ok']}  err:{self.gs_state['gps_err']}")
 
-        # 8. Ground Station Communication Stats
-        hw_text = f"433:{self.gs_state['hw_433']} 920:{self.gs_state['hw_920']}"
-        self.card_gs_stat["val"].config(text=f"{self.gs_state['ok_433']} Pkts", foreground="#00BCD4")
-        self.card_gs_stat["sub"].config(text=f"硬體:{hw_text} | CRC錯誤:{self.gs_state['crc_433']}")
+        # 8. Ground Station Communication Stats or Avionics Health Bits
+        if self.device_role == "AVIONICS":
+            self.card_gs_stat["title"].config(text="航電板健康狀態")
+            sens_color = "#4CAF50" if self.sensor_health_bits == 0 else "#E91E63"
+            self.card_gs_stat["val"].config(text=f"Sens: 0x{self.sensor_health_bits:02X}", foreground=sens_color)
+            ekf_color = "#4CAF50" if self.ekf_health_bits == 0 else "#FFC107"
+            self.card_gs_stat["sub"].config(text=f"EKF健康碼: 0x{self.ekf_health_bits:02X}")
+        else:
+            self.card_gs_stat["title"].config(text="地面站通訊統計")
+            hw_text = f"433:{self.gs_state['hw_433']} 920:{self.gs_state['hw_920']}"
+            self.card_gs_stat["val"].config(text=f"{self.gs_state['ok_433']} Pkts", foreground="#00BCD4")
+            self.card_gs_stat["sub"].config(text=f"硬體:{hw_text} | CRC錯誤:{self.gs_state['crc_433']}")
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="RocketCom Ground Station GUI")
+    parser.add_argument("--port", type=str, default=None, help="Serial port to open")
+    parser.add_argument("--baud", type=int, default=460800, help="Serial baud rate")
+    args = parser.parse_args()
+
     root = tk.Tk()
     app = GroundMonitorGUI(root)
+    
+    if args.port:
+        app.serial_port.set(args.port)
+        app.baud_rate.set(args.baud)
+        # Auto-connect if port is provided via CLI
+        app.root.after(500, app.toggle_connection)
     
     # Graceful exit on window close
     def on_closing():
