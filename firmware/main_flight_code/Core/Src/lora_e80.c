@@ -52,21 +52,23 @@
 #define E80_TCXO_DELAY        0x000140UL  /* TCXO 啟動延遲（×30.52us，0x140=320≈9.8ms） */
 #define E80_USE_DCDC          0           /* 0=LDO（保守）；1=DC-DC（須外部電感，E80 多含） */
 
-/* ---- RF 開關真值表 ★依 Ebyte E80-xxxM2213S 使用手冊 v1.1 第 5 頁（DIO5/RFSW0=bit0, DIO6/RFSW1=bit1）----
- * ⚠ 手冊注3 明示：E80 的開關控制狀態「與 SEMTECH 官方 SDK 預設不同」（原驅動誤用 Semtech 預設值）：
- *     DIO5 DIO6  狀態
- *      0    0    RX
- *      0    1    TX Sub-GHz 低功率 (LP)
- *      1    0    TX Sub-GHz 高功率 (HP) ← 主航電下行主用
- *      1    1    TX 2.4GHz
- * enable: 哪些 DIO 充當 RF 開關；其餘為各模式下 DIO5/DIO6 的高低電平組合。 */
-#define E80_RFSW_ENABLE       0x03U       /* DIO5+DIO6 皆作 RF 開關 */
-#define E80_RFSW_STBY         0x00U       /* 待機：全低（= RX 路徑，安全） */
-#define E80_RFSW_RX           0x00U       /* 接收：DIO5=0,DIO6=0（地面站主用） */
-#define E80_RFSW_TX           0x02U       /* TX 低功率 LP：DIO5=0,DIO6=1 */
-#define E80_RFSW_TX_HP        0x01U       /* TX 高功率 HP（+22dBm，下行主用）：DIO5=1,DIO6=0 */
-#define E80_RFSW_TX_HF        0x03U       /* TX 2.4GHz：DIO5=1,DIO6=1（本專案不用） */
-#define E80_RFSW_GNSS         0x00U
+/* ---- RF 開關組態 ★對齊 Ebyte E80-xxxM2213S 使用手冊 v1.1「第 8 頁億佰特 E80 專用
+ *   SDK 程式碼」（smtc_shield_lr11xx_common_rf_switch_cfg，只適用於 E80 系列模組）----
+ * ⚠ 手冊第 5 頁的 DIO5/DIO6 真值表與第 8 頁的億佰特自訂 SDK 程式碼「互相矛盾」：
+ *   兩者僅 TX-HP 一致（DIO5=1,DIO6=0），RX 與 TX-LP 相反。手冊 p.5 note3 本身即
+ *   指明開關狀態「與 SEMTECH 官方 SDK 預設不同，請參考…億佰特自訂 SDK」——即 p.8。
+ *   故以 p.8 億佰特 SDK 為權威來源（原本照 p.5 表寫的 RX=0x00 會讓天線未接到 LNA、
+ *   地面站完全收不到）。各欄位 = 該模式下 RFSW0(DIO5,bit0)/RFSW1(DIO6,bit1)/RFSW2(DIO7,bit2)
+ *   的高電平組合，取自 p.8：
+ *     .enable=RFSW0|RFSW1|RFSW2  .standby=0
+ *     .rx=RFSW1        .tx=RFSW0|RFSW1   .tx_hp=RFSW0   .tx_hf=0   .gnss=RFSW2  .wifi=0 */
+#define E80_RFSW_ENABLE       0x07U       /* RFSW0|RFSW1|RFSW2 皆作 RF 開關 */
+#define E80_RFSW_STBY         0x00U       /* 待機：全低 */
+#define E80_RFSW_RX           0x02U       /* 接收：RFSW1_HIGH（DIO6=1）★地面站主用（原 0x00 為 p.5 誤表） */
+#define E80_RFSW_TX           0x03U       /* TX 低功率 LP：RFSW0|RFSW1（DIO5=1,DIO6=1） */
+#define E80_RFSW_TX_HP        0x01U       /* TX 高功率 HP（+22dBm，下行主用）：RFSW0_HIGH（DIO5=1,DIO6=0） */
+#define E80_RFSW_TX_HF        0x00U       /* TX 2.4GHz：本專案不用（億佰特 SDK tx_hf=0） */
+#define E80_RFSW_GNSS         0x04U       /* RFSW2_HIGH（不影響 sub-G 收發） */
 #define E80_RFSW_WIFI         0x00U
 
 /* ============================================================
@@ -77,6 +79,7 @@
 #define LR_GET_VERSION        0x0101U
 #define LR_CALIBRATE          0x010FU
 #define LR_SET_REGMODE        0x0110U
+#define LR_CALIB_IMAGE        0x0111U
 #define LR_SET_DIO_RFSW       0x0112U
 #define LR_SET_DIO_IRQ        0x0113U
 #define LR_CLEAR_IRQ          0x0114U
@@ -283,6 +286,18 @@ static HAL_StatusTypeDef e80_set_rf_switch(void)
     return lr_cmd(LR_SET_DIO_RFSW, rfsw, 8);
 }
 
+/* 影像校準（CalibImage 0x0111）：換到目標頻段後校準影像抑制，確保 RX 靈敏度。
+ * 與 TCXO 供電方式解耦——E80 自供電振盪器亦需此步。須於 STANDBY_RC 執行。
+ * 頻段位元組由 lora_calc.h 的純函式計算（與 host 測試共用同一份）。 */
+static HAL_StatusTypeDef e80_calib_image(uint32_t freq_hz)
+{
+    uint8_t cb[2];
+    lr1121_calib_image_bytes(freq_hz, cb);
+    HAL_StatusTypeDef st = lr_cmd(LR_CALIB_IMAGE, cb, 2);
+    (void)e80_wait_busy(50U);   /* 校準需時（數 ms），等 BUSY 確實結束 */
+    return st;
+}
+
 /* 設定 DIO IRQ 遮罩（32-bit ×2：dio1 / dio2）。事件放 dio1（假設模組 INT=LR1121 DIO9）。 */
 static HAL_StatusTypeDef e80_set_dio_irq(uint32_t irq)
 {
@@ -397,6 +412,10 @@ HAL_StatusTypeDef LoRaE80_Init(SPI_HandleTypeDef *hspi)
      *   PaSel=0x01, regPaSupply=0x01(VBAT), paDutyCycle=0x04, paHpSel=0x07。 */
     uint8_t pa[4] = { 0x01, 0x01, 0x04, 0x07 };
     lr_cmd(LR_SET_PA_CFG, pa, 4);
+
+    /* ★ 影像校準：LR1121 開機預設為 sub-G 低頻，跳到 920MHz 頻段須校準一次，
+     *   否則 RX 影像抑制未最佳化、靈敏度打折（rdy 但收得弱）。standby 中執行。 */
+    e80_calib_image(E80_RF_FREQ_HZ);
 
     /* 頻率 / 調變 / 發射功率 */
     e80_apply_rf(E80_RF_FREQ_HZ, E80_LORA_SF, E80_LORA_BW, E80_LORA_CR, E80_TX_POWER_DBM);
@@ -576,6 +595,8 @@ HAL_StatusTypeDef LoRaE80_Reconfig(uint32_t freq_hz, uint8_t sf, uint8_t bw,
     if (st != HAL_OK) return st;
 
     s_preamble = preamble;
+
+    e80_calib_image(freq_hz);   /* 換頻段須重新影像校準（standby 中） */
 
     st = e80_apply_rf(freq_hz, sf, bw, cr, pwr_dbm);
     if (st != HAL_OK) return st;

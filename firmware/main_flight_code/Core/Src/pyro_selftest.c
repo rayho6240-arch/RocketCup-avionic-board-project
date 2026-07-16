@@ -98,6 +98,29 @@ void PyroSelfTest_RunOnce(void)
     fflush(stdout);
     delay_fed(PYRO_SELFTEST_GAP_MS);
 
+    /* === 步驟 2.5：在 PWM 啟動前，先拉高 PWM 腳位 (PD14) 1 秒 === */
+    printf("[PYRO-SELFTEST] [2.5] 先拉高 PWM 腳位 (PD14) 1s...\r\n");
+    fflush(stdout);
+    {
+        GPIO_InitTypeDef GPIO_InitStruct = {0};
+        GPIO_InitStruct.Pin = PWM_Servo_Pin;
+        GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+        GPIO_InitStruct.Pull = GPIO_NOPULL;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &GPIO_InitStruct);
+        HAL_GPIO_WritePin(PWM_Servo_GPIO_Port, PWM_Servo_Pin, GPIO_PIN_SET);
+    }
+    delay_fed(1000U);
+    {
+        GPIO_InitTypeDef GPIO_InitStruct = {0};
+        GPIO_InitStruct.Pin = PWM_Servo_Pin;
+        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+        GPIO_InitStruct.Pull = GPIO_NOPULL;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+        GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &GPIO_InitStruct);
+    }
+
     /* === 步驟 3：舵機 0°→180°→(停)→0°，PWM 期間 State2 LED 亮 === */
     printf("[PYRO-SELFTEST] [3] 舵機 PWM 啟動 + State2 亮：0°(%uus)→180°(%uus)\r\n",
            (unsigned)PYRO_SELFTEST_SERVO_0DEG_US, (unsigned)PYRO_SELFTEST_SERVO_180DEG_US);

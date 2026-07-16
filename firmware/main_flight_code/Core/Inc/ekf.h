@@ -85,7 +85,15 @@ uint8_t  EKF_GetHealthBits(void);
 uint32_t EKF_GetLastUpdateTick(void);
 
 void EKF_SaveCalibrationToFlash(void);
+
+/* P0-x：校準政策 —— 上電必重校。
+ * EKF_LoadCalibrationFromFlash()：讀 Flash → 套 mag 硬鐵偏移 + 把加計/陀螺偏置
+ *   與 baro 基準存為「比對參考值」；不再直接套用、不設 EKF_calibrated。
+ * EKF_ApplyFlashCalibration()：把參考值真正套用並設 EKF_calibrated=1；僅供
+ *   FEATURE_HOTSTART 空中恢復路徑（空中無法靜置 3 秒重校）。 */
 void EKF_LoadCalibrationFromFlash(void);
+void EKF_ApplyFlashCalibration(void);
+
 void EKF_HotRestartRestore(float last_altitude, float est_vel_z, const float *last_q);
 void EKF_ResetCalibration(void);
 void EKF_SaveMagCalibration(float cx, float cy, float cz);

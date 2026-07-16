@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../firmware/main_flight_code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto
+BINS := test_sensor_axis test_fsm test_fsm_elevator test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto test_vertical_filter
 
 .PHONY: run clean
 
@@ -18,8 +18,19 @@ run: $(BINS)
 test_sensor_axis: test_sensor_axis.c ../firmware/main_flight_code/Core/Inc/sensor_axis.h ../firmware/main_flight_code/Core/Inc/attitude_math.h
 	$(CC) $(CFLAGS) -o $@ test_sensor_axis.c $(LDLIBS)
 
-test_fsm: test_fsm.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/main_flight_code/Core/Inc/fsm.h
-	$(CC) $(CFLAGS) -o $@ test_fsm.c ../firmware/main_flight_code/Core/Src/fsm.c $(LDLIBS)
+# 板上刻意停用熱啟動（board_config.h FEATURE_HOTSTART=0），但 FSM_HotStartDecide
+# 的決策邏輯仍須驗證（golden test [8]），故 host 測試以 -DFEATURE_HOTSTART=1 強制開啟。
+# ★必須明確 -DFLIGHT_PROFILE_ELEVATOR=0：board_config.h 的預設值會隨上板前準備哪個
+# profile 而變動（電梯場測期間預設為 1），若不覆寫，這份「飛行剖面黃金測試」會悄悄
+# 吃到電梯常數而非真實飛行常數，卻不會報錯——曾實際踩過（大量對不上的黃金值一度
+# 誤判為邏輯改壞，實際是編譯吃錯 profile）。
+test_fsm: test_fsm.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/main_flight_code/Core/Inc/fsm.h ../firmware/main_flight_code/Core/Inc/board_config.h
+	$(CC) $(CFLAGS) -DFEATURE_HOTSTART=1 -DFLIGHT_PROFILE_ELEVATOR=0 -o $@ test_fsm.c ../firmware/main_flight_code/Core/Src/fsm.c $(LDLIBS)
+
+# 電梯場測 profile（FLIGHT_PROFILE_ELEVATOR=1）：門檻縮放 + 強制 baro 降級鏈，
+# 驗證與飛行 profile 共用同一份 fsm.c 邏輯在電梯剖面下的行為（見 test_fsm_elevator.c）。
+test_fsm_elevator: test_fsm_elevator.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/main_flight_code/Core/Inc/fsm.h ../firmware/main_flight_code/Core/Inc/board_config.h
+	$(CC) $(CFLAGS) -DFLIGHT_PROFILE_ELEVATOR=1 -o $@ test_fsm_elevator.c ../firmware/main_flight_code/Core/Src/fsm.c $(LDLIBS)
 
 test_ekf_guard: test_ekf_guard.c ../firmware/main_flight_code/Core/Inc/ekf_guard.h
 	$(CC) $(CFLAGS) -o $@ test_ekf_guard.c $(LDLIBS)
@@ -56,6 +67,9 @@ test_lora_calc: test_lora_calc.c ../firmware/main_flight_code/Core/Inc/lora_calc
 
 test_uplink_proto: test_uplink_proto.c ../firmware/main_flight_code/Core/Inc/uplink_proto.h ../firmware/main_flight_code/Core/Inc/crc16.h
 	$(CC) $(CFLAGS) -o $@ test_uplink_proto.c $(LDLIBS)
+
+test_vertical_filter: test_vertical_filter.c ../firmware/main_flight_code/Core/Inc/vertical_filter.h
+	$(CC) $(CFLAGS) -o $@ test_vertical_filter.c $(LDLIBS)
 
 clean:
 	rm -f $(BINS)

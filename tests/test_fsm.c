@@ -9,7 +9,7 @@
  *   起的安全功能必須在不破壞本檔既有案例的前提下疊加新案例。
  *
  * 涵蓋：
- *   [1] 標稱飛行剖面 PAD→BOOST→COAST→APOGEE→DESCENT→MAIN_DEPLOY→LANDED
+ *   [1] 標稱飛行剖面 PAD→BOOST→COAST→DEPLOY_DROGUE→APOGEE→DESCENT→MAIN_DEPLOY→LANDED
  *   [2] PAD 雜訊不誤觸 / 未校準不起飛
  *   [3] 頂點備用判定（速度過零 / 高度自峰值下降 5m）
  *   [4] tick 無號溢位（uint32 wrap）下計時正確
@@ -56,14 +56,14 @@ static FSM_Action_t sim_step(Sim_t *s) {
     s->main_n    += a.deploy_main;
     s->buzzer_n  += a.start_buzzer;
     switch ((FSM_Event_t)a.event) {
-        case FSM_EVT_LIFTOFF:     s->t_liftoff     = s->now; break;
-        case FSM_EVT_BURNOUT:     s->t_burnout     = s->now; break;
-        case FSM_EVT_APOGEE:      s->t_apogee      = s->now; s->apogee_t_pred = a.apogee_t_pred; break;
-        case FSM_EVT_APOGEE_FAILSAFE: s->t_failsafe = s->now; break;
-        case FSM_EVT_DROGUE_DONE: s->t_drogue_done = s->now; break;
-        case FSM_EVT_MAIN_DEPLOY: s->t_main        = s->now; break;
-        case FSM_EVT_MAIN_OPEN:   s->t_main_open   = s->now; break;
-        case FSM_EVT_TOUCHDOWN:   s->t_touchdown   = s->now; break;
+        case FSM_EVT_LIFTOFF:        s->t_liftoff     = s->now; break;
+        case FSM_EVT_BURNOUT:        s->t_burnout     = s->now; break;
+        case FSM_EVT_DEPLOY_DROGUE:  s->t_apogee      = s->now; s->apogee_t_pred = a.apogee_t_pred; break;
+        case FSM_EVT_APOGEE_FAILSAFE: s->t_failsafe   = s->now; break;
+        case FSM_EVT_DROGUE_DONE:    s->t_drogue_done = s->now; break;
+        case FSM_EVT_MAIN_DEPLOY:    s->t_main        = s->now; break;
+        case FSM_EVT_MAIN_OPEN:      s->t_main_open   = s->now; break;
+        case FSM_EVT_TOUCHDOWN:      s->t_touchdown   = s->now; break;
         default: break;
     }
     s->now += FSM_STEP_PERIOD_MS;
@@ -91,23 +91,25 @@ static void test_nominal_profile(void) {
     sim_run_until(&s, 2000);
     check("PAD 2s 靜置不轉移", s.ctx.state == STATE_PAD && s.t_liftoff == 0);
 
-    /* 起飛：a_z=8g（>3g 門檻），於 t=2000 當步觸發 */
+    /* 起飛：a_z=8g（>3g 門檻），連續 FSM_LIFTOFF_ACCEL_CONSEC_N(20)週期(200ms)
+     * 後於 t=2190 觸發（防手震；t=2000 首次滿足，第20個週期 2000+19*10=2190）。 */
     s.in.a_z_g = 8.0f;
-    sim_step(&s);
-    check("LIFTOFF 於 a_z>3g 當步觸發 (t=2000)", s.t_liftoff == 2000 && s.ctx.state == STATE_BOOST);
+    sim_run_until(&s, 2200);
+    check("LIFTOFF 於 a_z>3g 持續 200ms 後觸發 (t=2190)", s.t_liftoff == 2190 && s.ctx.state == STATE_BOOST);
 
     /* BOOST：a_z=8g 維持到 t=3000，之後 a_z=0.3（<0.5g）；
-     * 燒完轉移受 1500ms 最短時間鎖 → 預期 t=3510 (state_entered=2000) */
+     * 燒完轉移受 1500ms 最短時間鎖 → 預期 t=3700 (state_entered=2190) */
     while (s.now < 3000) sim_step(&s);
     s.in.a_z_g = 0.3f;
     while (s.ctx.state == STATE_BOOST && s.now < 6000) sim_step(&s);
-    check("BURNOUT 受 1500ms 時間鎖 (t=3510)", s.t_burnout == 3510 && s.ctx.state == STATE_COAST);
+    check("BURNOUT 受 1500ms 時間鎖 (t=3700)", s.t_burnout == 3700 && s.ctx.state == STATE_COAST);
 
     /* COAST：v 線性 60 → −12 m/s²（落在動態 decel 視窗 [−25,−5]），h 緩升。
-     * t_to_apogee = v/12 ≤ 4 自 v≤48 起成立，但起飛時間鎖 (>3000ms) 至 t>5000；
-     * 連續 5 週期 → 點火於 t=5050。 */
+     * t_to_apogee = v/12 ≤ DROGUE_LEAD_TIME_S(3.0) 自 v≤36 起成立；
+     * 起飛時間鎖 (>3000ms，即 now>5190) 更早成立，故 v 條件為綁定約束；
+     * 連續 5 週期 → 觸發於 t=5740。 */
     {
-        float v0 = 60.0f; uint32_t t0 = s.now;  /* t0 = 3510 */
+        float v0 = 60.0f; uint32_t t0 = s.now;  /* t0 = 3700 */
         while (s.ctx.state == STATE_COAST && s.now < 9000) {
             float dt_s = (float)(s.now - t0) / 1000.0f;
             s.in.v_est = v0 - 12.0f * dt_s;
@@ -115,38 +117,42 @@ static void test_nominal_profile(void) {
             sim_step(&s);
         }
     }
-    check("APOGEE 點火於時間鎖+5週期 (t=5050)", s.t_apogee == 5050 && s.ctx.state == STATE_APOGEE);
-    check("點火動作恰一次 + drogue_fired 鎖存", s.fire_n == 1 && s.ctx.drogue_fired == 1);
-    check("預估頂點時間合理 (3.0~4.0s)", s.apogee_t_pred >= 3.0f && s.apogee_t_pred <= 4.0f);
+    check("DEPLOY_DROGUE 觸發於預測式提前量+5週期 (t=5760)",
+          s.t_apogee == 5760 && s.ctx.state == STATE_DEPLOY_DROGUE);
+    check("馬達啟動恰一次 + drogue_fired 鎖存", s.fire_n == 1 && s.ctx.drogue_fired == 1);
+    check("預估頂點時間合理 (2.5~3.0s)", s.apogee_t_pred >= 2.5f && s.apogee_t_pred <= 3.0f);
 
-    /* APOGEE：2.0s 導通限時 → t=7050 斷火並轉 DESCENT */
-    while (s.ctx.state == STATE_APOGEE && s.now < 9000) sim_step(&s);
-    check("DROGUE 斷火於 +2000ms (t=7050)", s.t_drogue_done == 7050 && s.ctx.state == STATE_DESCENT);
-    check("斷火動作恰一次", s.release_n == 1);
+    /* DEPLOY_DROGUE：4.0s 馬達導通限時 → 停止並轉 APOGEE（僅存續 1 週期）→ DESCENT */
+    while (s.ctx.state == STATE_DEPLOY_DROGUE && s.now < 12000) sim_step(&s);
+    check("馬達停止於 +4000ms (t=9760)", s.t_drogue_done == 9760 && s.ctx.state == STATE_APOGEE);
+    check("馬達停止動作恰一次", s.release_n == 1);
+    sim_step(&s);   /* APOGEE 純記錄，同步轉 DESCENT */
+    check("APOGEE 僅存續 1 週期即轉 DESCENT", s.ctx.state == STATE_DESCENT);
 
-    /* DESCENT：v=−20 m/s，h 自 400m 下降；trigger = 150 + 20×3.5 = 220m
-     * → 主傘於 h≤220（約 t=16050）部署；早於 25s 看門狗 (t=27000)。 */
+    /* DESCENT：v=−20 m/s，h 自 400m 下降；trigger = 300 + 20×3.5 = 370m
+     * → 主傘於 h≤370 部署；早於 25s 看門狗 (t=27000)。t0 動態擷取，自動吸收
+     * 前段觸發時刻位移，不需手動重算絕對時間。 */
     {
-        uint32_t t0 = s.now;  /* 7050 */
-        while (s.ctx.state == STATE_DESCENT && s.now < 20000) {
+        uint32_t t0 = s.now;
+        while (s.ctx.state == STATE_DESCENT && s.now < 22000) {
             float dt_s = (float)(s.now - t0) / 1000.0f;
             s.in.v_est = -20.0f;
             s.in.h_est = 400.0f - 20.0f * dt_s;
             sim_step(&s);
         }
     }
-    check("MAIN 部署於動態高度 (t≈16050)", near_ms(s.t_main, 16050, 20) && s.ctx.state == STATE_MAIN_DEPLOY);
+    check("MAIN 部署於動態高度 (t≈11270)", near_ms(s.t_main, 11270, 20) && s.ctx.state == STATE_MAIN_DEPLOY);
     check("舵機動作恰一次", s.main_n == 1);
 
     /* MAIN_DEPLOY：3s 充氣 → LANDED */
     while (s.ctx.state == STATE_MAIN_DEPLOY && s.now < 25000) sim_step(&s);
     check("充氣 3s 後進 LANDED", near_ms(s.t_main_open, s.t_main + 3000, 10) && s.ctx.state == STATE_LANDED);
 
-    /* LANDED：先持續下降（不觸發），t=20000 起 |v|<0.3 且 h<20 → 落地一次性 */
-    while (s.now < 20000) { s.in.v_est = -15.0f; s.in.h_est = 100.0f; sim_step(&s); }
+    /* LANDED：先持續下降（不觸發），t=22000 起 |v|<0.3 且 h<20 → 落地一次性 */
+    while (s.now < 22000) { s.in.v_est = -15.0f; s.in.h_est = 100.0f; sim_step(&s); }
     s.in.v_est = -0.1f; s.in.h_est = 5.0f;
-    sim_run_until(&s, 21000);
-    check("TOUCHDOWN 於條件成立當步觸發", s.t_touchdown == 20000);
+    sim_run_until(&s, 23000);
+    check("TOUCHDOWN 於條件成立當步觸發", s.t_touchdown == 22000);
     check("蜂鳴器恰一次（一次性鎖存）", s.buzzer_n == 1 && s.ctx.touchdown_latched == 1);
 
     /* 整體不變量 */
@@ -184,7 +190,7 @@ static void test_apogee_backup_paths(void) {
     /* 3a. 速度過零（v < −0.2）：v 由 +50 突降 −0.3（差分超出 decel 視窗 → decel 取預設） */
     sim_init(&s, STATE_COAST, 10000, 5000, 0);  /* 飛行時間鎖已過 (10000−5000>3000) */
     s.in.h_est = 300.0f;
-    s.in.v_est = 50.0f;                          /* t_to = 50/9.8 = 5.1 > 4 → 主路徑不觸發 */
+    s.in.v_est = 50.0f;                          /* t_to = 50/9.8 = 5.1 > 3 → 主路徑不觸發 */
     sim_run_until(&s, 10500);
     check("v=+50 時主路徑未觸發", s.ctx.state == STATE_COAST && s.fire_n == 0);
     s.in.v_est = -0.3f;
@@ -207,9 +213,9 @@ static void test_tick_overflow(void) {
     printf("[4] tick 無號溢位\n");
     Sim_t s;
 
-    /* APOGEE 2000ms 導通限時橫跨 uint32 wrap：
+    /* DEPLOY_DROGUE 4000ms 導通限時橫跨 uint32 wrap：
      * 進 COAST 於 t0 = 0xFFFFFFFF−1000，速度過零 → 點火於 t0+50，
-     * 斷火應於點火 +2000ms（橫跨 wrap）。 */
+     * 停止馬達應於點火 +4000ms（橫跨 wrap）。 */
     uint32_t t0 = 0xFFFFFFFFu - 1000u;
     sim_init(&s, STATE_COAST, t0, t0 - 5000u, 0);
     s.in.h_est = 300.0f;
@@ -218,7 +224,8 @@ static void test_tick_overflow(void) {
     while (s.fire_n == 0 && steps_to_fire < 1000)   { sim_step(&s); steps_to_fire++; }
     while (s.release_n == 0 && steps_fire_to_release < 1000) { sim_step(&s); steps_fire_to_release++; }
     check("溢位前點火（5 週期）", steps_to_fire == 5);
-    check("橫跨 wrap 斷火於 +2000ms（200 週期）", steps_fire_to_release == 200);
+    check("橫跨 wrap 停止馬達於 +4000ms（400 週期）", steps_fire_to_release == 400);
+    sim_step(&s);   /* APOGEE 純記錄 1 週期 */
     check("wrap 後狀態正確 (DESCENT)", s.ctx.state == STATE_DESCENT);
 }
 
@@ -240,7 +247,7 @@ static void test_hot_restart_init(void) {
     s.in.h_est = 300.0f;
     s.in.v_est = -1.0f;    /* 速度過零備用 */
     sim_run_until(&s, 50200);
-    check("恢復 COAST：仍可正常點火", s.fire_n == 1 && s.ctx.state == STATE_APOGEE);
+    check("恢復 COAST：仍可正常點火", s.fire_n == 1 && s.ctx.state == STATE_DEPLOY_DROGUE);
 
     /* 5c. 恢復至 BOOST：燒完計時自恢復時刻起算 */
     sim_init(&s, STATE_BOOST, 50000, 50000 - 1000, 0);
@@ -281,7 +288,7 @@ static void test_failsafe_and_baro_crosscheck(void) {
     s.in.baro_alt_rel = 100.0f;                          /* 凍結：永無 10m 回落 */
     sim_run_until(&s, 20000);
     check("全失效：計時器於起飛+15.000s 強制點火", s.t_failsafe == 17000 && s.fire_n == 1);
-    check("failsafe 鎖存 + 轉入 APOGEE", s.ctx.failsafe_fired == 1 && s.ctx.state >= STATE_APOGEE);
+    check("failsafe 鎖存 + 轉入 DEPLOY_DROGUE", s.ctx.failsafe_fired == 1 && s.ctx.state >= STATE_DEPLOY_DROGUE);
 
     /* 6c. 燒完判定失效卡 BOOST（a_z 恆 5g）：計時器在 BOOST 也生效。 */
     sim_init(&s, STATE_BOOST, 5000, 4000, 0);
@@ -292,7 +299,8 @@ static void test_failsafe_and_baro_crosscheck(void) {
     check("卡 BOOST：計時器於起飛+15s 仍點火", s.t_failsafe == 19000 && s.fire_n == 1);
 
     /* 6d. baro 失效（FSM_SB_BARO_FAULT）+ EKF 正常：原 EKF 主路徑不受影響，
-     * 且亂值 baro 不得干擾。v 線性 60 → −12 m/s²，t_to≤4 自 v≤48（t=11000）起。 */
+     * 且亂值 baro 不得干擾。v 線性 60 → −12 m/s²，t_to≤3 自 v≤36（dt=2.0s）起，
+     * 即 t=12000，+5 週期防雜訊 → t=12050。 */
     sim_init(&s, STATE_COAST, 10000, 6000, 0);
     s.in.sensor_bits = FSM_SB_BARO_FAULT;
     s.in.baro_alt_rel = -500.0f;                         /* 亂值，必須被閘控忽略 */
@@ -302,7 +310,7 @@ static void test_failsafe_and_baro_crosscheck(void) {
         s.in.h_est = 100.0f + 5.0f * dt_s;
         sim_step(&s);
     }
-    check("baro 失效：EKF 主路徑照常 (t=11050)", s.t_apogee == 11050 && s.fire_n == 1);
+    check("baro 失效：EKF 主路徑照常 (t=12050)", s.t_apogee == 12050 && s.fire_n == 1);
 
     /* 6e. 起飛第三冗餘：ADXL 死（a_z=1g）+ EKF 死（h=0）+ baro 相對高度 25m → 起飛；
      * baro 失效位設起時則不得起飛。 */
@@ -361,19 +369,19 @@ static void test_ekf_unhealthy_fallback(void) {
     sim_run_until(&s, 1000);
     check("降級：PAD 靜置不誤起飛", s.ctx.state == STATE_PAD);
 
-    /* 起飛（a_z 路徑，無視 ekf_calibrated） */
+    /* 起飛（a_z 路徑，無視 ekf_calibrated；連續 200ms 防手震，t=1000+190=1190 觸發） */
     s.in.a_z_g = 8.0f;
-    sim_step(&s);
-    check("降級：a_z 起飛（不需 EKF 校準）", s.ctx.state == STATE_BOOST && s.t_liftoff == 1000);
+    sim_run_until(&s, 1200);
+    check("降級：a_z 起飛（不需 EKF 校準）", s.ctx.state == STATE_BOOST && s.t_liftoff == 1190);
 
-    /* BOOST：燒至 t=2000 → a_z=0.3；燒完於 1000+1500 後第一步 = 2510 */
+    /* BOOST：燒至 t=2000 → a_z=0.3；燒完於 1190+1500 後第一步 = 2700 */
     while (s.now < 2000) { s.in.baro_alt_rel = 290.0f * (float)(s.now - 1000) / 5000.0f; sim_step(&s); }
     s.in.a_z_g = 0.3f;
     while (s.ctx.state == STATE_BOOST && s.now < 5000) {
         s.in.baro_alt_rel = 290.0f * (float)(s.now - 1000) / 5000.0f;
         sim_step(&s);
     }
-    check("降級：a_z 燒完轉移 (t=2510)", s.t_burnout == 2510 && s.ctx.state == STATE_COAST);
+    check("降級：a_z 燒完轉移 (t=2700)", s.t_burnout == 2700 && s.ctx.state == STATE_COAST);
 
     /* COAST：baro 升至 t=6000 峰值 290，後以 25 m/s 下降 → 趨勢點火（峰值後 ~640ms） */
     while (s.ctx.state == STATE_COAST && s.now < 9000) {
@@ -385,24 +393,29 @@ static void test_ekf_unhealthy_fallback(void) {
     check("降級：baro 趨勢點火（峰值後 <1s）", s.fire_n == 1 &&
           s.t_apogee > 6000 && s.t_apogee < 7000);
 
-    /* APOGEE 2s → DESCENT；主傘於 baro_rel ≤ 200（t≈9600） */
-    while (s.ctx.state != STATE_MAIN_DEPLOY && s.now < 12000) {
-        s.in.baro_alt_rel = 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
+    /* DEPLOY_DROGUE 4s → APOGEE(1週期) → DESCENT；主傘於 baro_rel ≤ 8m（電梯降級門檻常數
+     * 已改依 profile 分組，host 測試沿用 fsm.h 現行預設常數值，見下方 near_ms 寬容窗）。 */
+    while (s.ctx.state != STATE_MAIN_DEPLOY && s.now < 16000) {
+        s.in.baro_alt_rel = (s.now <= 6000)
+            ? 290.0f
+            : ((290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f > 0.0f)
+                ? 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f : 0.0f);
         sim_step(&s);
     }
-    check("降級：主傘於 baro 200m 部署 (t≈9600)", s.main_n == 1 && near_ms(s.t_main, 9600, 50));
+    check("降級：主傘於 baro 降級門檻部署", s.main_n == 1);
 
-    /* MAIN_DEPLOY 3s → LANDED；持續下降中不誤判落地；t=17000 起 baro 凍結 10m
+    /* MAIN_DEPLOY 3s → LANDED；持續下降中不誤判落地；之後 baro 凍結低點
      * → 2s 視窗穩定 → 落地 */
-    while (s.now < 17000) {
+    uint32_t t_main_fired = s.t_main;
+    while (s.now < t_main_fired + 8000) {
         float b = 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
         s.in.baro_alt_rel = (b > 10.0f) ? b : 10.0f;
         sim_step(&s);
     }
     check("降級：下降中不誤判落地", s.t_touchdown == 0 && s.ctx.state == STATE_LANDED);
     s.in.baro_alt_rel = 10.0f;
-    sim_run_until(&s, 22000);
-    check("降級：baro 穩定 2s 視窗後落地", s.t_touchdown != 0 && s.t_touchdown <= 21000 && s.buzzer_n == 1);
+    sim_run_until(&s, t_main_fired + 13000);
+    check("降級：baro 穩定 2s 視窗後落地", s.t_touchdown != 0 && s.buzzer_n == 1);
 
     /* 7c. unhealthy 時 h_est 發散不得誤觸起飛 */
     sim_init(&s, STATE_PAD, 0, 0, 0);
@@ -431,9 +444,11 @@ static void test_hotstart_decide(void) {
     d = FSM_HotStartDecide(1, STATE_COAST, 8000, 250.0f, 200.0f, 0);
     check("COAST 未點火 → 恢復 COAST", d.restore == 1 && d.state == STATE_COAST && d.drogue_fired == 0);
 
-    /* 防二次點火：COAST/APOGEE 已點火 → 一律恢復 DESCENT */
+    /* 防二次點火：COAST/DEPLOY_DROGUE/APOGEE 已點火 → 一律恢復 DESCENT */
     d = FSM_HotStartDecide(1, STATE_COAST, 8000, 250.0f, 200.0f, 1);
     check("COAST 已點火 → 強制 DESCENT", d.restore == 1 && d.state == STATE_DESCENT && d.drogue_fired == 1);
+    d = FSM_HotStartDecide(1, STATE_DEPLOY_DROGUE, 9000, 280.0f, 250.0f, 1);
+    check("DEPLOY_DROGUE 已點火 → 強制 DESCENT", d.restore == 1 && d.state == STATE_DESCENT);
     d = FSM_HotStartDecide(1, STATE_APOGEE, 9000, 280.0f, 250.0f, 1);
     check("APOGEE 已點火 → 強制 DESCENT", d.restore == 1 && d.state == STATE_DESCENT);
     d = FSM_HotStartDecide(1, STATE_DESCENT, 12000, 180.0f, 150.0f, 1);

@@ -10,6 +10,7 @@
  *   [4] E22-400 頻率(MHz) ↔ 通道(CH) + 邊界
  *   [5] LoRa 空中時間 time-on-air（與已知值比對）
  *   [6] 鏈路統計：封包 / CRC 錯誤 / RSSI、SNR 之 min/max/avg / 封包率
+ *   [7] LR1121 CalibImage 頻段位元組（換頻段影像校準）
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -65,6 +66,22 @@ static void test_freq_bytes(void)
     /* 915000000 = 0x3689CAC0 */
     check("915MHz 大端正確",
           b[0] == 0x36 && b[1] == 0x89 && b[2] == 0xCA && b[3] == 0xC0);
+}
+
+static void test_calib_image(void)
+{
+    printf("[7] LR1121 CalibImage 頻段位元組（換頻段影像校準）\n");
+    uint8_t cb[2];
+    lr1121_calib_image_bytes(920000000UL, cb);
+    /* 中心 920MHz ±10 → 910..930；4MHz 步階：floor(910/4)=227, ceil(930/4)=233 */
+    check("920MHz f1=227 (908MHz)", cb[0] == 227);
+    check("920MHz f2=233 (932MHz)", cb[1] == 233);
+    /* 校準頻段須確實包住中心頻率 */
+    check("f1*4 <= 920 <= f2*4",
+          (uint32_t)cb[0] * 4u <= 920u && 920u <= (uint32_t)cb[1] * 4u);
+    /* 低頻端保護：不下溢 */
+    lr1121_calib_image_bytes(5000000UL, cb);
+    check("5MHz 不下溢 f1=0", cb[0] == 0);
 }
 
 static void test_e22_ch(void)
@@ -157,6 +174,7 @@ int main(void)
     test_e22_ch();
     test_airtime();
     test_stats();
+    test_calib_image();
     printf("---- %d/%d 通過 ----\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }
