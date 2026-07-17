@@ -109,9 +109,9 @@ static float elevator_profile(uint32_t t) {
  *            於 n=134（t=28340，baro=27.99）；consec_baro_drop 需連續 40 週期
  *            → 於 n=173（t=28730）達 40；再需 FSM_APOGEE_CONSEC_N=5 週期確認
  *            → 於 n=177（t=28770）點火。
- *   drogue_done：apogee + FSM_DROGUE_MOTOR_RUN_MS(4000) = 32770（DEPLOY_DROGUE 馬達
- *            停止；APOGEE 僅存續 1 週期即轉 DESCENT，晚於原 2000ms 版本，但仍遠早於
- *            baro 自然降到 main 門檻的 t=41670，下游時刻不受影響）。
+ *   drogue_done：apogee + FSM_DROGUE_MOTOR_RUN_MS(8000) = 36770（DEPLOY_DROGUE 馬達
+ *            停止；APOGEE 僅存續 1 週期即轉 DESCENT，仍遠早於 baro 自然降到 main 門檻的
+ *            t=41670，下游時刻不受影響）。
  *   main   ：baro≤FSM_FB_MAIN_ALT_M(8.0) 首次成立於 n=1467（t=41670，baro=7.995）。
  *   main_open：main + FSM_MAIN_INFLATE_MS(3000) = 44670。
  *   touchdown：LANDED 於 44670 取樣基準 baro=3.495；t=46670 視窗到期但
@@ -134,7 +134,7 @@ static void test_nominal_elevator(void) {
     check("LIFTOFF 於 baro>3.0m (t=4010)", s.t_liftoff == 4010 && s.fire_n <= 1);
     check("BURNOUT 受 1500ms 時間鎖 (t=5520)", near_ms(s.t_burnout, 5520, 10));
     check("APOGEE 於自峰值回落2m+連續40+5週期 (t≈28770)", near_ms(s.t_apogee, 28770, 20));
-    check("馬達停止於 +4000ms (t≈32770)", near_ms(s.t_drogue_done, s.t_apogee + 4000U, 10));
+    check("馬達停止於 +8000ms (t≈36770)", near_ms(s.t_drogue_done, s.t_apogee + 8000U, 10));
     check("MAIN 部署於 baro≤8m (t≈41670)", near_ms(s.t_main, 41670, 20));
     check("MAIN_OPEN 於 +3000ms (t≈44670)", near_ms(s.t_main_open, s.t_main + 3000U, 10));
     check("TOUCHDOWN 於地面穩定2s視窗後 (t≈48670)", near_ms(s.t_touchdown, 48670, 30));

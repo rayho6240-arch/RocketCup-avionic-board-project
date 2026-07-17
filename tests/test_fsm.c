@@ -105,9 +105,9 @@ static void test_nominal_profile(void) {
     check("BURNOUT 受 1500ms 時間鎖 (t=3700)", s.t_burnout == 3700 && s.ctx.state == STATE_COAST);
 
     /* COAST：v 線性 60 → −12 m/s²（落在動態 decel 視窗 [−25,−5]），h 緩升。
-     * t_to_apogee = v/12 ≤ DROGUE_LEAD_TIME_S(3.0) 自 v≤36 起成立；
-     * 起飛時間鎖 (>3000ms，即 now>5190) 更早成立，故 v 條件為綁定約束；
-     * 連續 5 週期 → 觸發於 t=5740。 */
+     * t_to_apogee = v/12 ≤ DROGUE_LEAD_TIME_S(飛行 4.0) 自 v≤48（dt=1.0s，t=4700）起成立，
+     * 但起飛時間鎖 (>3000ms，即 now>5190) 更晚 → 時間鎖為綁定約束；
+     * 連續 5 週期 → 觸發於 t=5240。 */
     {
         float v0 = 60.0f; uint32_t t0 = s.now;  /* t0 = 3700 */
         while (s.ctx.state == STATE_COAST && s.now < 9000) {
@@ -117,14 +117,14 @@ static void test_nominal_profile(void) {
             sim_step(&s);
         }
     }
-    check("DEPLOY_DROGUE 觸發於預測式提前量+5週期 (t=5760)",
-          s.t_apogee == 5760 && s.ctx.state == STATE_DEPLOY_DROGUE);
+    check("DEPLOY_DROGUE 觸發於預測式提前量+5週期 (t=5240)",
+          s.t_apogee == 5240 && s.ctx.state == STATE_DEPLOY_DROGUE);
     check("馬達啟動恰一次 + drogue_fired 鎖存", s.fire_n == 1 && s.ctx.drogue_fired == 1);
-    check("預估頂點時間合理 (2.5~3.0s)", s.apogee_t_pred >= 2.5f && s.apogee_t_pred <= 3.0f);
+    check("預估頂點時間合理 (3.0~4.0s)", s.apogee_t_pred >= 3.0f && s.apogee_t_pred <= 4.0f);
 
-    /* DEPLOY_DROGUE：4.0s 馬達導通限時 → 停止並轉 APOGEE（僅存續 1 週期）→ DESCENT */
-    while (s.ctx.state == STATE_DEPLOY_DROGUE && s.now < 12000) sim_step(&s);
-    check("馬達停止於 +4000ms (t=9760)", s.t_drogue_done == 9760 && s.ctx.state == STATE_APOGEE);
+    /* DEPLOY_DROGUE：8.0s 馬達導通限時 → 停止並轉 APOGEE（僅存續 1 週期）→ DESCENT */
+    while (s.ctx.state == STATE_DEPLOY_DROGUE && s.now < 18000) sim_step(&s);
+    check("馬達停止於 +8000ms", s.t_drogue_done == s.t_apogee + 8000 && s.ctx.state == STATE_APOGEE);
     check("馬達停止動作恰一次", s.release_n == 1);
     sim_step(&s);   /* APOGEE 純記錄，同步轉 DESCENT */
     check("APOGEE 僅存續 1 週期即轉 DESCENT", s.ctx.state == STATE_DESCENT);
@@ -141,7 +141,7 @@ static void test_nominal_profile(void) {
             sim_step(&s);
         }
     }
-    check("MAIN 部署於動態高度 (t≈11270)", near_ms(s.t_main, 11270, 20) && s.ctx.state == STATE_MAIN_DEPLOY);
+    check("MAIN 部署於動態高度 (t≈14760)", near_ms(s.t_main, 14760, 20) && s.ctx.state == STATE_MAIN_DEPLOY);
     check("舵機動作恰一次", s.main_n == 1);
 
     /* MAIN_DEPLOY：3s 充氣 → LANDED */
@@ -213,9 +213,9 @@ static void test_tick_overflow(void) {
     printf("[4] tick 無號溢位\n");
     Sim_t s;
 
-    /* DEPLOY_DROGUE 4000ms 導通限時橫跨 uint32 wrap：
+    /* DEPLOY_DROGUE 8000ms 導通限時橫跨 uint32 wrap：
      * 進 COAST 於 t0 = 0xFFFFFFFF−1000，速度過零 → 點火於 t0+50，
-     * 停止馬達應於點火 +4000ms（橫跨 wrap）。 */
+     * 停止馬達應於點火 +8000ms（橫跨 wrap）。 */
     uint32_t t0 = 0xFFFFFFFFu - 1000u;
     sim_init(&s, STATE_COAST, t0, t0 - 5000u, 0);
     s.in.h_est = 300.0f;
@@ -224,7 +224,7 @@ static void test_tick_overflow(void) {
     while (s.fire_n == 0 && steps_to_fire < 1000)   { sim_step(&s); steps_to_fire++; }
     while (s.release_n == 0 && steps_fire_to_release < 1000) { sim_step(&s); steps_fire_to_release++; }
     check("溢位前點火（5 週期）", steps_to_fire == 5);
-    check("橫跨 wrap 停止馬達於 +4000ms（400 週期）", steps_fire_to_release == 400);
+    check("橫跨 wrap 停止馬達於 +8000ms（800 週期）", steps_fire_to_release == 800);
     sim_step(&s);   /* APOGEE 純記錄 1 週期 */
     check("wrap 後狀態正確 (DESCENT)", s.ctx.state == STATE_DESCENT);
 }
@@ -299,8 +299,8 @@ static void test_failsafe_and_baro_crosscheck(void) {
     check("卡 BOOST：計時器於起飛+15s 仍點火", s.t_failsafe == 19000 && s.fire_n == 1);
 
     /* 6d. baro 失效（FSM_SB_BARO_FAULT）+ EKF 正常：原 EKF 主路徑不受影響，
-     * 且亂值 baro 不得干擾。v 線性 60 → −12 m/s²，t_to≤3 自 v≤36（dt=2.0s）起，
-     * 即 t=12000，+5 週期防雜訊 → t=12050。 */
+     * 且亂值 baro 不得干擾。v 線性 60 → −12 m/s²，t_to≤4（飛行 lead）自 v≤48（dt=1.0s）起，
+     * 即 t=11000，+5 週期防雜訊 → t=11050。 */
     sim_init(&s, STATE_COAST, 10000, 6000, 0);
     s.in.sensor_bits = FSM_SB_BARO_FAULT;
     s.in.baro_alt_rel = -500.0f;                         /* 亂值，必須被閘控忽略 */
@@ -310,7 +310,7 @@ static void test_failsafe_and_baro_crosscheck(void) {
         s.in.h_est = 100.0f + 5.0f * dt_s;
         sim_step(&s);
     }
-    check("baro 失效：EKF 主路徑照常 (t=12050)", s.t_apogee == 12050 && s.fire_n == 1);
+    check("baro 失效：EKF 主路徑照常 (t=11050)", s.t_apogee == 11050 && s.fire_n == 1);
 
     /* 6e. 起飛第三冗餘：ADXL 死（a_z=1g）+ EKF 死（h=0）+ baro 相對高度 25m → 起飛；
      * baro 失效位設起時則不得起飛。 */
@@ -404,17 +404,20 @@ static void test_ekf_unhealthy_fallback(void) {
     }
     check("降級：主傘於 baro 降級門檻部署", s.main_n == 1);
 
-    /* MAIN_DEPLOY 3s → LANDED；持續下降中不誤判落地；之後 baro 凍結低點
-     * → 2s 視窗穩定 → 落地 */
+    /* MAIN_DEPLOY 3s 充氣 → LANDED；LANDED 內先餵持續下降 baro（>2m/2s，仍變動）→ 不誤判落地；
+     * 之後凍結 baro 低點 → 2s 視窗穩定 → 落地。以 t_main 相對計時（不受 8s 馬達位移影響）。 */
     uint32_t t_main_fired = s.t_main;
-    while (s.now < t_main_fired + 8000) {
-        float b = 290.0f - 25.0f * (float)(s.now - 6000) / 1000.0f;
+    /* Phase A：main 後 6s（含 3s 充氣 + 3s LANDED 下降）餵 40→10m 持續下降（<30 但變動）→ 不落地 */
+    while (s.now < t_main_fired + 6000) {
+        float dt = (float)(s.now - t_main_fired) / 1000.0f;
+        float b = 40.0f - 5.0f * dt;
         s.in.baro_alt_rel = (b > 10.0f) ? b : 10.0f;
         sim_step(&s);
     }
     check("降級：下降中不誤判落地", s.t_touchdown == 0 && s.ctx.state == STATE_LANDED);
+    /* Phase B：凍結 baro 於 10m → 連續 2s 視窗穩定（需跨 2 個取樣點 ref 皆為 10）→ 落地 */
     s.in.baro_alt_rel = 10.0f;
-    sim_run_until(&s, t_main_fired + 13000);
+    sim_run_until(&s, t_main_fired + 12000);
     check("降級：baro 穩定 2s 視窗後落地", s.t_touchdown != 0 && s.buzzer_n == 1);
 
     /* 7c. unhealthy 時 h_est 發散不得誤觸起飛 */
@@ -468,6 +471,38 @@ static void test_hotstart_decide(void) {
 }
 
 /* ---------------------------------------------------------------- */
+static void test_follow_peer_state(void) {
+    printf("[9] FSM_FollowPeerState（副板狀態跟隨：forward-only、上限 DESCENT、pad 防護）\n");
+    FSM_Context_t ctx;
+
+    /* 9a. PAD（未起飛）：不論主板態多前都不前推（防 pad 收偽封包誤跟隨→低空誤點火） */
+    FSM_Init(&ctx, STATE_PAD, 1000, 0, 0);
+    FSM_FollowPeerState(&ctx, STATE_DESCENT, 2000);
+    check("PAD 不跟隨（state<BOOST 守門）", ctx.state == STATE_PAD);
+
+    /* 9b. BOOST → 主板 COAST：前推到 COAST，更新 state_entered */
+    FSM_Init(&ctx, STATE_BOOST, 1000, 500, 0);
+    FSM_FollowPeerState(&ctx, STATE_COAST, 2000);
+    check("BOOST 跟隨主板 COAST", ctx.state == STATE_COAST && ctx.state_entered_ms == 2000);
+
+    /* 9c. 主板 MAIN_DEPLOY：上限 DESCENT（300m 點火始終由副板自身 baro/命令決定，主板不能命令前推點火） */
+    FSM_Init(&ctx, STATE_COAST, 1000, 500, 0);
+    FSM_FollowPeerState(&ctx, STATE_MAIN_DEPLOY, 3000);
+    check("上限 DESCENT（主板 MAIN_DEPLOY 只推到 DESCENT）", ctx.state == STATE_DESCENT);
+
+    /* 9d. forward-only：主板態較落後不回退 */
+    FSM_Init(&ctx, STATE_DESCENT, 1000, 500, 0);
+    FSM_FollowPeerState(&ctx, STATE_BOOST, 3000);
+    check("forward-only：不回退", ctx.state == STATE_DESCENT);
+
+    /* 9e. 同態不前推（state_entered 不變） */
+    FSM_Init(&ctx, STATE_COAST, 1000, 500, 0);
+    ctx.state_entered_ms = 1234;
+    FSM_FollowPeerState(&ctx, STATE_COAST, 5000);
+    check("同態不前推（state_entered 不變）", ctx.state == STATE_COAST && ctx.state_entered_ms == 1234);
+}
+
+/* ---------------------------------------------------------------- */
 int main(void) {
     printf("=== test_fsm：飛行狀態機黃金剖面（P0-A 行為保存） ===\n");
     test_nominal_profile();
@@ -478,6 +513,7 @@ int main(void) {
     test_failsafe_and_baro_crosscheck();
     test_ekf_unhealthy_fallback();
     test_hotstart_decide();
+    test_follow_peer_state();
     printf("----------------------------------------\n");
     printf("%s：%d/%d 通過\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

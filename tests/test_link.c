@@ -11,6 +11,7 @@
  *   [5] 情境C：主板在線但從不送開傘通知 → 備板 grace 到期自行點火
  *   [6] 情境D：grace 期間才收到主板開傘 → 備板抑制
  *   [7] 點火不重複：已點火後即使 FSM 再次要求亦不重複輸出
+ *   [8] LinkPeer_Synced：雙向心跳 echo（對端 ack_state 回報已採用我方狀態）＝ACK 確認
  */
 #include <stdio.h>
 #include <string.h>
@@ -133,6 +134,26 @@ static void test_no_double_fire(void) {
     check("整段僅點火 1 次（fired 鎖存）", cnt == 1);
 }
 
+static void test_synced_echo(void) {
+    printf("[8] LinkPeer_Synced（雙向心跳 echo＝ACK）\n");
+    LinkPeer_t pr; LinkPeer_Init(&pr);
+    check("未收包 → 未同步", !LinkPeer_Synced(&pr, 3));
+
+    /* 對端(副板)回報 ack_state=3：已採用我方(主板) STATE_COAST=3 → 對我的 ACK */
+    LinkPacket_t p = make_pkt(LINK_BOARD_BACKUP, 3, 0, 1000);
+    p.ack_state = 3;
+    LinkPeer_OnPacket(&pr, &p, 1000);
+    check("記錄 peer_ack_state",                    pr.peer_ack_state == 3);
+    check("我方 state=3：對端已 echo → 已同步",      LinkPeer_Synced(&pr, 3));
+    check("我方 state=4：對端尚未 echo → 未同步",    !LinkPeer_Synced(&pr, 4));
+
+    /* 主板前進到 state=4；副板跟進後 echo=4 → 重新同步 */
+    LinkPacket_t p2 = make_pkt(LINK_BOARD_BACKUP, 4, 0, 1050);
+    p2.ack_state = 4;
+    LinkPeer_OnPacket(&pr, &p2, 1050);
+    check("副板跟進後 echo=4 → 主板判已同步",        LinkPeer_Synced(&pr, 4));
+}
+
 int main(void) {
     printf("=== test_link：對端狀態 + 備板開傘仲裁 ===\n");
     test_freshness();
@@ -142,6 +163,7 @@ int main(void) {
     test_scenario_C_peer_alive_no_fire();
     test_scenario_D_peer_latched_during_grace();
     test_no_double_fire();
+    test_synced_echo();
     printf("----------------------------------------\n");
     printf("%s：%d/%d 通過\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

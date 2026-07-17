@@ -258,6 +258,16 @@ class RocketDashboardApp:
         self.map_dirty = False
         self.map_zoomed = False   # 首筆定位時自動 zoom-in 一次
         
+        # GPS 尋星與解包狀態
+        self.gps_status_info = {
+            "fix": 0,
+            "sats": 0,
+            "stale": 1,
+            "ok": 0,
+            "err": 0,
+            "rate": 0.0
+        }
+        
         # 記錄檔配置
         self.log_file = None
         self.save_log_var = tk.BooleanVar(value=True)
@@ -366,7 +376,8 @@ class RocketDashboardApp:
             ("GPS Update", "gps", "0.00 Hz", "#e03bfb"),
             ("Flash PKTs", "flash_pkt", "0 Pkts", "#ffffff"),
             ("ALT 高度", "alt", "-- m", "#00e676"),
-            ("Vz 垂直速度", "vz", "-- m/s", "#00e676")
+            ("Vz 垂直速度", "vz", "-- m/s", "#00e676"),
+            ("BATTERY 電池", "bat", "-- V", "#ffa500")
         ]
         
         for idx, (title, key, default, color) in enumerate(card_labels):
@@ -523,7 +534,7 @@ class RocketDashboardApp:
             self.canvas.draw()
 
     def clear_rate_cards(self):
-        defaults = {"flash_pkt": "0 Pkts", "alt": "-- m", "vz": "-- m/s"}
+        defaults = {"flash_pkt": "0 Pkts", "alt": "-- m", "vz": "-- m/s", "bat": "-- V"}
         for key in self.cards:
             self.cards[key].config(text=defaults.get(key, "0.00 Hz"))
         self.lbl_drops.config(text="EKF Queue Drops: 0")
@@ -696,9 +707,64 @@ class RocketDashboardApp:
                                      anchor="w", justify=tk.LEFT, padx=10, pady=6)
         self.lbl_gps_info.pack(fill=tk.X, padx=8, pady=(0, 4))
 
+        # 建立地圖與狀態欄的左右對齊容器
+        container = tk.Frame(tab, bg="#1e1e1e")
+        container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # 左側地圖容器
+        map_container = tk.Frame(container, bg="#1e1e1e")
+        map_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 右側 GPS 尋星與封包解析狀態面板
+        status_panel = tk.Frame(container, bg="#101014", width=180, highlightbackground="#2a2a30", highlightthickness=1)
+        status_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
+        status_panel.pack_propagate(False)
+
+        # 狀態面板標題
+        tk.Label(status_panel, text="📡 GPS 尋星狀態", bg="#101014", fg="#00d2ff",
+                 font=("Helvetica", 9, "bold"), pady=6).pack(fill=tk.X)
+        
+        # 狀態面板網格
+        grid = tk.Frame(status_panel, bg="#101014", padx=6, pady=4)
+        grid.pack(fill=tk.BOTH, expand=True)
+        
+        # 1. 定位狀態
+        tk.Label(grid, text="定位狀態:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=0, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_fix = tk.Label(grid, text="等待數據", bg="#101014", fg="#ffcc00", font=("Helvetica", 9, "bold"), anchor="e")
+        self.lbl_gps_status_fix.grid(row=0, column=1, sticky="e", pady=4)
+        
+        # 2. 衛星數量
+        tk.Label(grid, text="衛星數量:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_sats = tk.Label(grid, text="0", bg="#101014", fg="#ffffff", font=("Helvetica", 9, "bold"), anchor="e")
+        self.lbl_gps_status_sats.grid(row=1, column=1, sticky="e", pady=4)
+        
+        # 3. 訊號延遲/Stale狀態
+        tk.Label(grid, text="信號狀態:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=2, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_stale = tk.Label(grid, text="等待數據", bg="#101014", fg="#777777", font=("Helvetica", 9), anchor="e")
+        self.lbl_gps_status_stale.grid(row=2, column=1, sticky="e", pady=4)
+        
+        # 4. 解析成功
+        tk.Label(grid, text="解析成功:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=3, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_ok = tk.Label(grid, text="0", bg="#101014", fg="#00e676", font=("Helvetica", 9), anchor="e")
+        self.lbl_gps_status_ok.grid(row=3, column=1, sticky="e", pady=4)
+        
+        # 5. 解析失敗
+        tk.Label(grid, text="解析失敗:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=4, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_err = tk.Label(grid, text="0", bg="#101014", fg="#ffffff", font=("Helvetica", 9), anchor="e")
+        self.lbl_gps_status_err.grid(row=4, column=1, sticky="e", pady=4)
+        
+        # 6. 更新頻率
+        tk.Label(grid, text="更新頻率:", bg="#101014", fg="#888888", font=("Helvetica", 9), anchor="w").grid(row=5, column=0, sticky="w", pady=4)
+        self.lbl_gps_status_rate = tk.Label(grid, text="0.00 Hz", bg="#101014", fg="#e03bfb", font=("Helvetica", 9), anchor="e")
+        self.lbl_gps_status_rate.grid(row=5, column=1, sticky="e", pady=4)
+
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, weight=1)
+
+        # 載入實體地圖或後備相對軌跡圖
         if HAVE_MAPVIEW:
-            self.map_widget = tkintermapview.TkinterMapView(tab, corner_radius=0)
-            self.map_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            self.map_widget = tkintermapview.TkinterMapView(map_container, corner_radius=0)
+            self.map_widget.pack(fill=tk.BOTH, expand=True)
             self.map_widget.set_position(23.97, 120.97)   # 預設台灣中心，待首筆定位跳轉
             self.map_widget.set_zoom(8)
             self.map_marker = None
@@ -719,8 +785,46 @@ class RocketDashboardApp:
             self.trk_line, = self.trk_ax.plot([], [], color="#00e5ff", lw=1.2)
             self.trk_pt,   = self.trk_ax.plot([], [], color="#ff1744", marker="o", ms=8, lw=0)
             self.trk_home, = self.trk_ax.plot([], [], color="#00e676", marker="^", ms=9, lw=0)
-            self.trk_canvas = FigureCanvasTkAgg(self.trk_fig, master=tab)
-            self.trk_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            self.trk_canvas = FigureCanvasTkAgg(self.trk_fig, master=map_container)
+            self.trk_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self.update_gps_status_panel()
+
+    def update_gps_status_panel(self):
+        """重新整理 UI 面板上的 GPS 尋星與解析狀態數據"""
+        if not hasattr(self, 'lbl_gps_status_fix'):
+            return
+        
+        info = self.gps_status_info
+        
+        # 1. 定位狀態標籤
+        if info["fix"] == 0:
+            self.lbl_gps_status_fix.config(text="未定位 (No Fix)", fg="#ff3366")
+        elif info["fix"] == 1:
+            self.lbl_gps_status_fix.config(text="已定位 (3D Fix)", fg="#00e676")
+        elif info["fix"] == 2:
+            self.lbl_gps_status_fix.config(text="差分定位 (DGPS)", fg="#00e676")
+        else:
+            self.lbl_gps_status_fix.config(text=f"定位中 ({info['fix']})", fg="#ffcc00")
+            
+        # 2. 衛星數量
+        self.lbl_gps_status_sats.config(text=str(info["sats"]), fg="#ffffff" if info["sats"] >= 4 else "#ffcc00")
+        
+        # 3. 訊號延遲/Stale狀態
+        if info["stale"] == 1:
+            self.lbl_gps_status_stale.config(text="資料逾時 (Stale)", fg="#ff3366")
+        else:
+            self.lbl_gps_status_stale.config(text="即時更新 (Active)", fg="#00e676")
+            
+        # 4. 解析成功語句數
+        self.lbl_gps_status_ok.config(text=str(info["ok"]))
+        
+        # 5. 解析失敗語句數
+        err_fg = "#ffffff" if info["err"] == 0 else "#ff3366"
+        self.lbl_gps_status_err.config(text=str(info["err"]), fg=err_fg)
+        
+        # 6. 更新頻率
+        self.lbl_gps_status_rate.config(text=f"{info['rate']:.2f} Hz")
 
     @staticmethod
     def _latlon_to_en(lat, lon, lat0, lon0):
@@ -1073,7 +1177,11 @@ class RocketDashboardApp:
             if m_x: self.cards["adxl"].config(text=f"{float(m_x.group(1)):.2f} Hz")
             if m_b: self.cards["bmp"].config(text=f"{float(m_b.group(1)):.2f} Hz")
             if m_m: self.cards["mag"].config(text=f"{float(m_m.group(1)):.2f} Hz")
-            if m_gps: self.cards["gps"].config(text=f"{float(m_gps.group(1)):.2f} Hz")
+            if m_gps:
+                gps_rate = float(m_gps.group(1))
+                self.cards["gps"].config(text=f"{gps_rate:.2f} Hz")
+                self.gps_status_info["rate"] = gps_rate
+                self.update_gps_status_panel()
             if m_drop: self.lbl_drops.config(text=f"EKF Queue Drops: {m_drop.group(1)}")
             
         # C. 解析 Flash 封包 [FLASH_RING] PKT_TOTAL:xx ADDR:xx
@@ -1125,21 +1233,41 @@ class RocketDashboardApp:
                     self.calib_x.append(self.latest_mag["mx"])
                     self.calib_y.append(self.latest_mag["my"])
 
+        # H. 解析 [PWR]（飛行板 1Hz 電池電壓）
+        elif "[PWR]" in line and "bat:" in line:
+            m = re.search(r"bat:(\d+)mV", line)
+            if m:
+                bat_v = float(m.group(1)) / 1000.0
+                bat_color = "#4CAF50" if bat_v >= 7.4 else ("#FFC107" if bat_v >= 6.8 else "#E91E63")
+                self.cards["bat"].config(text=f"{bat_v:.2f} V", foreground=bat_color)
+
         # I. 解析 [GPS]（飛行板 1Hz）：定位 → 地圖軌跡；海拔/地速 → 圖表原始序列
         elif "[GPS]" in line and "fix:" in line:
-            m = re.search(r"fix:(\d+) q:\d+ sat:(\d+) ([+-])(\d+\.\d+),([+-])(\d+\.\d+) "
-                          r"alt:(-?\d+)m spd:(-?\d+)cm/s", line)
-            if m and m.group(1) == "1":
-                lat = float(m.group(4)) * (1.0 if m.group(3) == '+' else -1.0)
-                lon = float(m.group(6)) * (1.0 if m.group(5) == '+' else -1.0)
-                if abs(lat) > 0.01 or abs(lon) > 0.01:   # 排除 0,0 假定位
-                    alt = int(m.group(7))
-                    spd = int(m.group(8)) / 100.0
-                    t = self.now_t()
-                    self.ts_alt_gps.append((t, float(alt)))
-                    self.ts_spd_gps.append((t, spd))
-                    self.on_gps_fix(lat, lon, alt_m=alt, spd_ms=spd, sats=int(m.group(2)))
-                    self.chart_dirty = True
+            m = re.search(r"fix:(\d+) q:\d+ sat:(\d+) ([+-])(\d+\.\d+),([+-])(\d+\.\d+) alt:(-?\d+)m spd:(-?\d+)cm/s(?: stale:(\d+) ok:(\d+) err:(\d+))?", line)
+            if m:
+                fix_val = int(m.group(1))
+                sats_val = int(m.group(2))
+                self.gps_status_info["fix"] = fix_val
+                self.gps_status_info["sats"] = sats_val
+                if m.group(9) is not None:
+                    self.gps_status_info["stale"] = int(m.group(9))
+                if m.group(10) is not None:
+                    self.gps_status_info["ok"] = int(m.group(10))
+                if m.group(11) is not None:
+                    self.gps_status_info["err"] = int(m.group(11))
+                self.update_gps_status_panel()
+                
+                if fix_val == 1:
+                    lat = float(m.group(4)) * (1.0 if m.group(3) == '+' else -1.0)
+                    lon = float(m.group(6)) * (1.0 if m.group(5) == '+' else -1.0)
+                    if abs(lat) > 0.01 or abs(lon) > 0.01:   # 排除 0,0 假定位
+                        alt = int(m.group(7))
+                        spd = int(m.group(8)) / 100.0
+                        t = self.now_t()
+                        self.ts_alt_gps.append((t, float(alt)))
+                        self.ts_spd_gps.append((t, spd))
+                        self.on_gps_fix(lat, lon, alt_m=alt, spd_ms=spd, sats=sats_val)
+                        self.chart_dirty = True
 
         # J. 解析 [GS_PKT]（地面站收到的火箭下行封包摘要）→ 圖表 + 地圖
         elif "[GS_PKT]" in line:
@@ -1164,6 +1292,10 @@ class RocketDashboardApp:
             m = re.search(r"gps:(\d+)/(\d+)", line)
             sats = int(m.group(1)) if m else None
             fix = (m and m.group(2) == "1")
+            if sats is not None:
+                self.gps_status_info["sats"] = sats
+                self.gps_status_info["fix"] = 1 if fix else 0
+                self.update_gps_status_panel()
             m = re.search(r"pos:([+-])(\d+\.\d+),([+-])(\d+\.\d+)", line)
             if fix and m:
                 lat = float(m.group(2)) * (1.0 if m.group(1) == '+' else -1.0)
@@ -2672,6 +2804,13 @@ class RocketDashboardApp:
                 val = {}
                 for k in keys:
                     val[k] = sum(s[k] for s in samples) / len(samples)
+                # 對於地磁計，直接平均 hdg 度數在 0°/360° 邊界（朝北）會產生嚴重的均值環繞錯誤
+                # 改為先將 Cartesian 分量 mx, my 平均，再用 np.arctan2 重新計算均值 hdg
+                if "mx" in val and "my" in val:
+                    hdg_deg = float(np.degrees(np.arctan2(-val["mx"], val["my"])))
+                    if hdg_deg < 0:
+                        hdg_deg += 360.0
+                    val["hdg"] = hdg_deg
                     
             ok = step_info["run"](val)
             msg = step_info["result_msg"](val, ok)
@@ -2692,13 +2831,13 @@ class RocketDashboardApp:
 TEST_STEPS = [
     {
         "step": 1,
-        "title": "【測試 1/9】BMI088 加速度計 Z 軸 (靜態)",
-        "prompt": "請將航電板【水平靜止放置於桌面，正面朝上】(Z 軸朝上)。\n置妥後，請按「開始檢測」...",
+        "title": "【測試 1/9】BMI088 加速度計 Z 軸 (鼻錐朝上 / 靜態)",
+        "prompt": "請將航電板【水平靜止放置於桌面，正面朝上】(Z 軸朝上，即鼻錐朝上)。\n置妥後，請按「開始檢測」...",
         "type": "static",
         "sensor": "IMU",
         "run": lambda val: 800.0 <= val["az"] <= 1200.0,
         "result_msg": lambda val, ok: f"📊 偵測結果：Z 軸加速度 = {val['az']:.1f} mG\n" + (
-            "✅ [PASS] Z 軸方向正確（朝上）！" if ok else
+            "✅ [PASS] Z 軸方向正確（鼻錐朝上）！" if ok else
             "❌ [FAIL] Z 軸方向異常！(預期 +800 ~ +1200 mG)\n💡 若接近 -1000 mG：代表 Z 軸被反置，需要在 main.c 中將 az 取負。"
         )
     },
@@ -2716,14 +2855,14 @@ TEST_STEPS = [
     },
     {
         "step": 3,
-        "title": "【測試 3/9】BMI088 加速度計 Y 軸 (鼻錐朝上)",
-        "prompt": "請將航電板【前緣/鼻錐抬高約 45 度】(前緣朝上，body 前軸朝天)。\n置妥後，請按「開始檢測」...",
+        "title": "【測試 3/9】BMI088 加速度計 Y 軸 (前緣朝上)",
+        "prompt": "請將航電板【前緣抬高約 45 度】(前緣朝上，body 前軸朝天)。\n置妥後，請按「開始檢測」...",
         "type": "static",
         "sensor": "IMU",
         "run": lambda val: val["ay"] > 200.0,
         "result_msg": lambda val, ok: f"📊 偵測結果：Y 軸加速度 = {val['ay']:.1f} mG\n" + (
-            "✅ [PASS] 鼻錐朝上時 ay 為正，Y=前 對齊正確！" if ok else
-            "❌ [FAIL] 鼻錐朝上時 ay 不為正！\n💡 建議：晶片貼裝與 sensor_axis.h 表格不符，請核對 IMU 映射 (Y->X)。"
+            "✅ [PASS] 前緣朝上時 ay 為正，Y=前 對齊正確！" if ok else
+            "❌ [FAIL] 前緣朝上時 ay 不為正！\n💡 建議：晶片貼裝與 sensor_axis.h 表格不符，請核對 IMU 映射 (Y->X)。"
         )
     },
     {
@@ -2756,7 +2895,7 @@ TEST_STEPS = [
     {
         "step": 6,
         "title": "【測試 6/9】BMI088 陀螺儀 X 軸 (Pitch/俯仰，繞右軸)",
-        "prompt": "請準備將航電板【快速抬頭/後仰】(前端/鼻錐朝上抬起)。\n按下「開始檢測」後，請【立即快速將板子前半部朝上抬起旋轉約 2 秒】...",
+        "prompt": "請準備將航電板【快速抬頭/後仰】(前端/前緣朝上抬起)。\n按下「開始檢測」後，請【立即快速將板子前半部朝上抬起旋轉約 2 秒】...",
         "type": "dynamic",
         "sensor": "IMU",
         "axis": "gx",
@@ -2769,7 +2908,7 @@ TEST_STEPS = [
     {
         "step": 7,
         "title": "【測試 7/9】BMI088 陀螺儀 Y 軸 (Roll/翻滾，繞前軸)",
-        "prompt": "請準備將航電板【快速向右翻滾】(右側向下傾斜)。\n按下「開始檢測」後，請【立即快速將板子向右翻滾】...",
+        "prompt": "請準備將航電板【快速向右翻滾】(right side down)。\n按下「開始檢測」後，請【立即快速將板子向右翻滾】...",
         "type": "dynamic",
         "sensor": "IMU",
         "axis": "gy",
@@ -2781,20 +2920,20 @@ TEST_STEPS = [
     },
     {
         "step": 8,
-        "title": "【測試 8/9】MMC5983MA 地磁計航向角 (鼻錐朝北 ≈ 0°)",
-        "prompt": "請將航電板水平靜置，並將【鼻錐朝向正北方】。\n置妥後，請按「開始檢測」...",
+        "title": "【測試 8/9】MMC5983MA 地磁計航向角 (前緣朝北 ≈ 0°)",
+        "prompt": "請將航電板水平靜置（Z軸朝天），並將【前緣/Y軸朝向正北方】。\n置妥後，請按「開始檢測」...",
         "type": "static",
         "sensor": "MAG",
         "run": lambda val: val["hdg"] <= 30.0 or val["hdg"] >= 330.0,
         "result_msg": lambda val, ok: f"📊 偵測結果：地磁向量 B = [{val['mx']:.1f}, {val['my']:.1f}] mG, 航向角 hdg = {val['hdg']:.1f}°\n" + (
-            f"✅ [PASS] 鼻錐朝北，航向角 {val['hdg']:.1f}° ≈ 0°，對齊正確！" if ok else
-            f"❌ [FAIL] 鼻錐朝北，航向角 {val['hdg']:.1f}°，預期 ≈ 0°（±30°）。\n💡 建議：在 main.c 調整磁力計 mx_body/my_body 的來源軸。"
+            f"✅ [PASS] 前緣朝北，航向角 {val['hdg']:.1f}° ≈ 0°，對齊正確！" if ok else
+            f"❌ [FAIL] 前緣朝北，航向角 {val['hdg']:.1f}°，預期 ≈ 0°（±30°）。\n💡 建議：在 main.c 調整磁力計 mx_body/my_body 的來源軸。"
         )
     },
     {
         "step": 9,
-        "title": "【測試 9/9】MMC5983MA 地磁計航向角收斂方向",
-        "prompt": "請將航電板【順時針旋轉 90 度】(鼻錐朝向正東方)。\n置妥後，請按「開始檢測」...",
+        "title": "【測試 9/9】MMC5983MA 地磁計航向角收斂方向 (前緣朝東 ≈ 90°)",
+        "prompt": "請將航電板水平靜置（Z軸朝天），並【順時針旋轉 90 度】(前緣朝向正東方)。\n置妥後，請按「開始檢測」...",
         "type": "static",
         "sensor": "MAG",
         "run": lambda val: 45.0 <= val["hdg"] <= 135.0,

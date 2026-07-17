@@ -3,7 +3,7 @@
  * ===========================================================================
  *   cd tests && make run
  *
- *   [1] LinkPacket_t 大小 = 26 bytes，欄位 byte offset 逐一鎖定（解碼契約）
+ *   [1] LinkPacket_t 大小 = 27 bytes，欄位 byte offset 逐一鎖定（解碼契約）
  *   [2] LinkProto_Build → LinkRx_Feed 往返一致（含 sync 對齊與 CRC）
  *   [3] 單一位元翻轉 → CRC 不符 → 不吐封包
  *   [4] 前綴雜訊 / 連續兩筆 → 正確對齊並解出
@@ -27,6 +27,7 @@ static LinkStatus_t sample_status(void) {
     st.seq         = 0x2A;
     st.fsm_state   = 3;            /* STATE_COAST */
     st.flags       = TELEM_FLAG_DROGUE_FIRED | TELEM_FLAG_FAILSAFE;
+    st.ack_state   = 6;            /* echo：已採用對端 STATE_DESCENT */
     st.tick_ms     = 123456;
     st.h_est_cm    = 25032;        /* 250.32 m */
     st.v_est_cms   = -1850;        /* -18.50 m/s */
@@ -37,8 +38,8 @@ static LinkStatus_t sample_status(void) {
 
 static void test_layout(void) {
     printf("[1] 封包大小與欄位 offset（解碼契約）\n");
-    check("sizeof(LinkPacket_t) == 26", sizeof(LinkPacket_t) == 26);
-    check("LINK_PACKET_SIZE == 26",     LINK_PACKET_SIZE == 26);
+    check("sizeof(LinkPacket_t) == 27", sizeof(LinkPacket_t) == 27);
+    check("LINK_PACKET_SIZE == 27",     LINK_PACKET_SIZE == 27);
 #define OFF(field, expect) \
     check("offsetof " #field " == " #expect, offsetof(LinkPacket_t, field) == (expect))
     OFF(sync0,       0);
@@ -47,12 +48,13 @@ static void test_layout(void) {
     OFF(seq,         3);
     OFF(fsm_state,   4);
     OFF(flags,       5);
-    OFF(tick_ms,     6);
-    OFF(h_est_cm,    10);
-    OFF(v_est_cms,   14);
-    OFF(baro_alt_cm, 18);
-    OFF(a_z_cg,      22);
-    OFF(crc16,       24);
+    OFF(ack_state,   6);
+    OFF(tick_ms,     7);
+    OFF(h_est_cm,    11);
+    OFF(v_est_cms,   15);
+    OFF(baro_alt_cm, 19);
+    OFF(a_z_cg,      23);
+    OFF(crc16,       25);
 #undef OFF
 }
 
@@ -61,7 +63,7 @@ static void test_roundtrip(void) {
     LinkStatus_t st = sample_status();
     uint8_t buf[LINK_PACKET_SIZE];
     uint16_t n = LinkProto_Build(buf, &st);
-    check("Build 回傳長度 == 26", n == LINK_PACKET_SIZE);
+    check("Build 回傳長度 == 27", n == LINK_PACKET_SIZE);
     check("buf[0],buf[1] == sync", buf[0] == LINK_SYNC0 && buf[1] == LINK_SYNC1);
 
     LinkRx_t rx; LinkRx_Init(&rx);
@@ -75,6 +77,7 @@ static void test_roundtrip(void) {
     check("seq 一致",         out.seq         == st.seq);
     check("fsm_state 一致",   out.fsm_state   == st.fsm_state);
     check("flags 一致",       out.flags       == st.flags);
+    check("ack_state 一致",   out.ack_state   == st.ack_state);
     check("tick_ms 一致",     out.tick_ms     == st.tick_ms);
     check("h_est_cm 一致",    out.h_est_cm    == st.h_est_cm);
     check("v_est_cms 一致",   out.v_est_cms   == st.v_est_cms);

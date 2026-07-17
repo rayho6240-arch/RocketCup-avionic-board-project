@@ -84,7 +84,7 @@
 /* 開傘（PWM 舵機）地面自測：設 1 → 每次重啟自動跑一次舵機釋放序列後停住，不進飛控。
  * 台面測試專用，飛行前務必設回 0。詳見 pyro_selftest.h（含刪除方式）。 */
 #ifndef FEATURE_PYRO_SELFTEST
-#define FEATURE_PYRO_SELFTEST 1
+#define FEATURE_PYRO_SELFTEST 0
 #endif
 
 /* 上行手動開傘：地面站經 433 反向打命令，火箭在下行之外空出 1/10 時槽接收。
@@ -111,11 +111,50 @@
 #define LINK_BAUD             38400U /* 主備兩板 USART2 同此值；短排線餘裕充足 */
 #define LINK_TX_PERIOD_MS     50U    /* 自身狀態廣播週期（20 Hz；飛控 100 Hz 每 5 次送一次） */
 #define LINK_PEER_TIMEOUT_MS  300U   /* 超過此值無有效封包 → 對端視為失聯（備板轉全自主） */
+#define LINK_SYNC_TIMEOUT_MS  300U   /* 主板換態後逾此值仍未收到副板 echo(ack_state) → 標記 LINK_DESYNC */
 
 /* === 備援航電開傘偏壓（不對稱：主決策、備補位） ===
  * 備板獨立跑自己的 FSM；判到開傘條件後不立即輸出，先等 BACKUP_GRACE_MS 觀察主板是否
  * 送來開傘通知（flags 帶 DROGUE_FIRED / MAIN_DEPLOYED）。若收到 → 抑制（主板已點，
  * 二極體 OR 同一點火頭）；若 grace 到期仍未收到（主板漏點 / 失聯）→ 備板自行點火。 */
 #define BACKUP_GRACE_MS       300U   /* 備板判到開傘後給主板的寬限期 */
+
+/* === GPS-ONLY 隔離除錯開關 ════════════════════════════════════════════════
+ * 1 = 關閉「除 GPS 外」的所有射頻/匯流排活動（LoRa 433+920、IMU/baro/highG 飛控管線、
+ *     磁力計、Flash 記錄、USB、蜂鳴器、板間鏈路、上行開傘…），只留 GPS(USART6) 與
+ *     printf 除錯輸出(USART2)。用途：判斷 GPS 在板上收 0 顆是否為飛控板自身 desense
+ *     ——把最可能的干擾源(LoRa/SMPS 負載/SPI/I2C)全靜音後，若衛星數開始上來即坐實干擾。
+ *     ★純測試用，量完務必改回 0，否則飛控/遙測/記錄全不會啟動！
+ * 0 = 正常（依 BOARD_ROLE 決定各功能）。 */
+#ifndef GPS_ONLY_DEBUG
+#define GPS_ONLY_DEBUG 0
+#endif
+#if GPS_ONLY_DEBUG
+  #undef  FEATURE_MAG
+  #undef  FEATURE_LORA
+  #undef  FEATURE_LORA_TX
+  #undef  FEATURE_LORA_RX
+  #undef  FEATURE_UPLINK_DEPLOY
+  #undef  FEATURE_FLIGHT
+  #undef  FEATURE_USB_CDC
+  #undef  FEATURE_FLASH
+  #undef  FEATURE_VFILTER
+  #undef  FEATURE_VFILTER_FSM
+  #undef  FEATURE_BUZZER
+  #undef  FEATURE_PYRO_SELFTEST
+  #define FEATURE_MAG           0
+  #define FEATURE_LORA          0   /* E22 433 + E80 920 完全不 init、不發射 */
+  #define FEATURE_LORA_TX       0
+  #define FEATURE_LORA_RX       0
+  #define FEATURE_UPLINK_DEPLOY 0
+  #define FEATURE_FLIGHT        0   /* 關整條 IMU/baro/highG→EKF→FSM 管線 */
+  #define FEATURE_USB_CDC       0
+  #define FEATURE_FLASH         0   /* 停 W25Q128 記錄，降低 SPI3 活動 */
+  #define FEATURE_VFILTER       0
+  #define FEATURE_VFILTER_FSM   0
+  #define FEATURE_BUZZER        0
+  #define FEATURE_PYRO_SELFTEST 0
+  /* FEATURE_GPS 保持開啟；FEATURE_LINK 維持 0 → printf 走 USART2@460800 可監看 [GPS_RAW] */
+#endif
 
 #endif /* BOARD_CONFIG_H */

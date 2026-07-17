@@ -37,6 +37,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  seq;          /* 遞增序號（自動 wrap），對端偵測丟包 */
     uint8_t  fsm_state;    /* FlightState_t 飛行狀態碼 */
     uint8_t  flags;        /* TELEM_FLAG_* 子集（DROGUE_FIRED/MAIN_DEPLOYED/FAILSAFE/...） */
+    uint8_t  ack_state;    /* echo-back：本板已採用/確認的「對端」FSM 狀態＝ACK（雙向狀態跟隨用） */
     uint32_t tick_ms;      /* 發送端飛行 tick；對端判 freshness / 飛行時間一致性 */
     int32_t  h_est_cm;     /* EKF 高度 (cm)：交叉檢查與事後判讀 */
     int32_t  v_est_cms;    /* EKF 垂直速度 (cm/s) */
@@ -53,6 +54,7 @@ typedef struct {
     uint8_t  seq;
     uint8_t  fsm_state;
     uint8_t  flags;
+    uint8_t  ack_state;   /* echo-back：本板已採用的對端 FSM 狀態＝ACK */
     uint32_t tick_ms;
     int32_t  h_est_cm;
     int32_t  v_est_cms;

@@ -4,13 +4,15 @@
  * 用途：在工作台上驗證「開傘」完整電火動作。MCU 一上電/重啟就自動執行「一次」序列，
  *       跑完停在原地（持續餵看門狗、SYS LED 續閃），不進正常飛控 FSM，故「每次重啟＝一次測試」。
  *
- * ─── 測試序列 ───
- *   開機：Buzzer 響兩聲（TIM2 CH1）。
- *   全程：SYS LED (PE2) 1Hz 持續閃爍 = 韌體存活。
- *   1. PD13 (FIRE / 副傘引爆 MOSFET) 拉高 6s（同時 State1 LED / PE3 亮），再拉低。
- *   2. 等待 5s。
- *   3. PD14 (PWM_Servo / TIM4 CH3) 產生 PWM 期間 State2 LED (PE4) 亮：
- *      舵機 0°→180°，於 180° 等待 5s，再 180°→0°，停 PWM、State2 熄。
+ * ─── 測試序列（雙板協調；依 BOARD_ROLE 分流。需 USART2 交叉排線接兩板 + FEATURE_LINK）───
+ *   開機：Buzzer 響兩聲（TIM2 CH1）；全程 SYS LED (PE2) 1Hz 閃 = 韌體存活；板間鏈路上線。
+ *   ● 主航電 (PRIMARY)：
+ *     1. PD13 (FIRE / 副傘 DC 馬達) 拉高 FSM_DROGUE_MOTOR_RUN_MS(8s)（State1/PE3 亮），再拉低。
+ *     2. 等待 PYRO_SELFTEST_GAP_MS。
+ *     3. PD14 舵機 0°→180°(停)→0°；「啟動 servo 同時」連續廣播 MAIN_DEPLOYED 命令，通知副板點火。
+ *   ● 副航電 (BACKUP)：不自主動作。監聽板間鏈路，收到主板命令(peer MAIN_DEPLOYED)才把 PD13
+ *     (FIRE / 主傘點火頭) 拉高 FSM_IGNITER_PULSE_MS(~1s) 脈衝後放開；無舵機動作。
+ *     單獨上電（無主板）→ 一直等、不點火（設計如此）。
  *   （序列最前面另有可調退避倒數 PYRO_SELFTEST_COUNTDOWN_S，供人員遠離後才點火。）
  *
  * ─── LED / Buzzer 腳位（GPIOE，active-high；如硬體為 active-low 改 PYRO_LED_ON/OFF）───

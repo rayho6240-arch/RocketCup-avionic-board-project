@@ -1645,8 +1645,8 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : RST_GPS_Pin */
   GPIO_InitStruct.Pin = RST_GPS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_GPS_GPIO_Port, &GPIO_InitStruct);
 
@@ -1732,6 +1732,11 @@ int _write(int file, char *ptr, int len)
 static FSM_Context_t g_fsm_ctx;
 volatile uint8_t g_fsm_failsafe_fired = 0;   /* 失效保護點火鎖存（telemetry TELEM_FLAG_FAILSAFE 讀取） */
 volatile uint8_t g_hotstart_restored  = 0;   /* P0-F：熱啟動恢復鎖存（telemetry TELEM_FLAG_HOTSTART） */
+
+/* 板間鏈路健康標記（FSM_Update 每拍更新；記錄至 Flash ring sys_flags 0x04/0x08 供事後判讀） */
+#define LINK_STATUS_LOST    0x01U   /* 對端逾 LINK_PEER_TIMEOUT_MS 無心跳 */
+#define LINK_STATUS_DESYNC  0x02U   /* 主板換態後逾 LINK_SYNC_TIMEOUT_MS 副板仍未 echo 跟進 */
+volatile uint8_t g_link_status = 0;
 
 static void FSM_Update(void)
 {
@@ -1850,32 +1855,44 @@ static void FSM_Update(void)
 #endif
 #endif /* FEATURE_VFILTER */
 
+    /* === 副航電：baro-only 強制 + 對端命令/狀態跟隨（置於 VFILTER_FSM 之後，覆蓋其對
+     * in.ekf_healthy 的重寫）=================================================
+     * 副板恆只靠氣壓計判斷高度/速度 → FSM 走純 baro 降級鏈（apogee=baro trend、
+     * 主觸發=baro_alt_rel）。peer_main_cmd = 主板廣播 MAIN_DEPLOYED(開 servo)＝命令點火。
+     * 狀態跟隨：主板每次換態經心跳持續重廣，副板 forward-only 前推（上限 DESCENT）。
+     * 失聯（peer 不新鮮）→ 忽略跟隨與命令，純 baro 自主。 */
+    in.peer_main_cmd = 0U;
+#if IS_BACKUP
+    in.ekf_healthy   = 0U;   /* 副航電永遠 baro-only（不吃 EKF/VF） */
+#endif
+#if (IS_BACKUP && FEATURE_LINK)
+    if (Link_PeerFresh(now)) {
+        const LinkPeer_t *peer = Link_GetPeer();
+        in.peer_main_cmd = peer->main_latched ? 1U : 0U;   /* 主板開 servo → 命令副板點火 */
+        FSM_FollowPeerState(&g_fsm_ctx, peer->fsm_state, now);
+    }
+#endif
+
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
     /* --- 1. 硬體動作（先於任何列印） --- */
-#if (IS_BACKUP && FEATURE_LINK)
-    /* 備援航電（不對稱冗餘）：自身 FSM 照常運算並推進狀態，但點火/部署輸出受閘控——
-     * 已收到主板開傘通知（鎖存）即抑制（共用點火頭，主板已點）；未收到則等
-     * BACKUP_GRACE_MS 後自行補點（主板漏點 / 失聯 / 死亡）。release/buzzer 照常輸出
-     * （自身未點火時 release 為無動作）。 */
+#if IS_BACKUP
+    /* 備援航電（非對稱功能分工）：唯一實體職責＝在 300m 用點火頭（PD13/FIRE_Pin）炸開主傘。
+     * 自身 FSM 照常推進（純 baro）＋跟隨主板態；act.deploy_main（自身 baro≤300m 或主板
+     * 命令 peer_main_cmd，且過 arm 互鎖，見 fsm.c STATE_DESCENT）→ FIRE_Pin 拉高一個
+     * FSM_IGNITER_PULSE_MS 脈衝後放開（e-match 毫秒級引爆，脈衝後放開保護 MOSFET/電池）。
+     * 不驅動副傘 DC 馬達、不驅動 servo。release_drogue 無對應機構故忽略；buzzer 照常。 */
     {
-        static BackupGate_t s_drogue_gate, s_main_gate;
-        static uint8_t s_gate_init = 0U;
-        if (!s_gate_init) {
-            BackupGate_Init(&s_drogue_gate);
-            BackupGate_Init(&s_main_gate);
-            s_gate_init = 1U;
+        static uint8_t  s_ign_active = 0U;
+        static uint32_t s_ign_tick   = 0U;
+        if (act.deploy_main) {
+            HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);    // 主傘點火頭導通
+            s_ign_active = 1U;
+            s_ign_tick   = now;
         }
-        const LinkPeer_t *peer = Link_GetPeer();
-
-        if (BackupGate_Step(&s_drogue_gate, act.fire_drogue, peer->drogue_latched, now, BACKUP_GRACE_MS)) {
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 補啟動副傘 DC 馬達（主板未開傘）
-        }
-        if (act.release_drogue) {
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 自身馬達限時導通保護：斷開
-        }
-        if (BackupGate_Step(&s_main_gate, act.deploy_main, peer->main_latched, now, BACKUP_GRACE_MS)) {
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 補部署主傘舵機（主板未部署）
+        if (s_ign_active && (now - s_ign_tick) >= FSM_IGNITER_PULSE_MS) {
+            HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);  // 脈衝結束：放開
+            s_ign_active = 0U;
         }
     }
 #else
@@ -1886,6 +1903,7 @@ static void FSM_Update(void)
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 馬達限時導通保護：斷開
     }
     if (act.deploy_main) {
+        HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
     }
 #endif
@@ -1906,6 +1924,7 @@ static void FSM_Update(void)
                 s_man_drogue_tick   = now;
             }
             if (man_main) {
+                HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);          // 手動主傘舵機釋放角度
             }
         }
@@ -1936,6 +1955,30 @@ static void FSM_Update(void)
     /* P0-E：飛行態（BOOST..MAIN_DEPLOY）禁止 Flash 同步滾動擦除（~400ms 阻塞） */
     FlashRing_SetEraseAllowed((g_fsm_ctx.state >= STATE_BOOST &&
                                g_fsm_ctx.state <= STATE_MAIN_DEPLOY) ? 0U : 1U);
+
+#if FEATURE_LINK
+    /* 板間鏈路健康標記（供 Flash 記錄/事後判讀，見 ring sys_flags 0x04/0x08）：
+     *   LOST   = 對端逾 LINK_PEER_TIMEOUT_MS 無有效心跳（副板轉全自主、純 baro）。
+     *   DESYNC = 主板換態後逾 LINK_SYNC_TIMEOUT_MS 仍未收到副板 echo(ack_state)＝已跟進本板態。 */
+    {
+        static uint8_t  s_link_last_state = 0xFFU;
+        static uint32_t s_link_state_tick = 0U;
+        if ((uint8_t)current_fsm_state != s_link_last_state) {
+            s_link_last_state = (uint8_t)current_fsm_state;
+            s_link_state_tick = now;
+        }
+        const LinkPeer_t *lp = Link_GetPeer();
+        uint8_t lst = 0U;
+        if (!Link_PeerFresh(now)) {
+            lst |= LINK_STATUS_LOST;
+        } else if (IS_PRIMARY &&
+                   !LinkPeer_Synced(lp, (uint8_t)current_fsm_state) &&
+                   (now - s_link_state_tick) >= LINK_SYNC_TIMEOUT_MS) {
+            lst |= LINK_STATUS_DESYNC;
+        }
+        g_link_status = lst;
+    }
+#endif
 
     /* --- 3. 事件列印（訊息逐字保留自原 FSM_Update） --- */
     switch ((FSM_Event_t)act.event) {
@@ -2006,6 +2049,9 @@ static void Link_BuildOwnStatus(LinkStatus_t *ls)
     ls->board_id  = IS_BACKUP ? LINK_BOARD_BACKUP : LINK_BOARD_PRIMARY;
     ls->seq       = 0U;   /* 由 Link_SendStatus 補遞增序號 */
     ls->fsm_state = (uint8_t)current_fsm_state;
+    /* echo-back：本板已採用的「對端」FSM 狀態＝對對端的 ACK（雙向狀態跟隨確認）。
+     * 主板據此判 LinkPeer_Synced(自身 state)＝副板已跟進；副板則回報已採用的主板狀態。 */
+    ls->ack_state = Link_GetPeer()->fsm_state;
 
     /* flags 與下行遙測同語意（TELEM_FLAG_*）；備板據主板 DROGUE_FIRED/MAIN_DEPLOYED 抑制 */
     uint8_t flags = 0U;
@@ -3132,8 +3178,12 @@ void StartDefaultTask(void *argument)
         
         // 抓取系統開傘狀態旗標
         uint8_t sys_flags = 0;
-        if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_13) == GPIO_PIN_SET) sys_flags |= 0x01; // 副傘已點火
+        if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_13) == GPIO_PIN_SET) sys_flags |= 0x01; // 副傘已點火（副板：300m 點火頭導通）
         if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000) sys_flags |= 0x02; // 主傘已釋放
+#if FEATURE_LINK
+        if (g_link_status & LINK_STATUS_LOST)   sys_flags |= 0x04; // 板間鏈路失聯
+        if (g_link_status & LINK_STATUS_DESYNC) sys_flags |= 0x08; // 副板未跟進主板狀態
+#endif
         ring_pkt.flags       = sys_flags;
         
         ring_pkt.bat_voltage_mv = g_bat_voltage_mv;   /* P0-E：改用 1Hz 快取（ADC 讀取移出 50Hz 寫入路徑） */
