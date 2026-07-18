@@ -398,7 +398,20 @@ class RocketDashboardApp:
         # --- 左上: 終端日誌 (Terminal Console) ---
         left_frame = tk.Frame(left_pane, bg="#1e1e1e")
 
-        tk.Label(left_frame, text=" > TERMINAL TELEMETRY STREAM", bg="#1e1e1e", fg="#00d2ff", font=("Monaco", 10, "bold")).pack(anchor="w", padx=10, pady=5)
+        # --- 指令/回應區：只顯示使用者指令與韌體對指令的回應（不含開機/系統/遙測）---
+        tk.Label(left_frame, text=" ★ 指令 / 回應", bg="#1e1e1e",
+                 fg="#ffcc00", font=("Monaco", 10, "bold")).pack(anchor="w", padx=10, pady=(5, 0))
+        self.event_console = ScrolledText(left_frame, bg="#0d0d0d", fg="#e0e0e0",
+                                          insertbackground="white", font=("Monaco", 9),
+                                          borderwidth=0, highlightthickness=1,
+                                          highlightbackground="#3a3a1a", height=9)
+        self.event_console.pack(fill=tk.X, padx=5, pady=(2, 6))
+        self.event_console.tag_config("cmd", foreground="#00d2ff")
+        self.event_console.tag_config("resp", foreground="#33ff88")
+        self.event_console.tag_config("boot", foreground="#e07bfb")
+        self.event_console.tag_config("err", foreground="#ff5b5b", background="#2a0000")
+
+        tk.Label(left_frame, text=" > TERMINAL TELEMETRY STREAM（完整資訊流）", bg="#1e1e1e", fg="#00d2ff", font=("Monaco", 10, "bold")).pack(anchor="w", padx=10, pady=5)
 
         # 終端底部按鈕區（先 pack 於底部，讓 console 撐滿剩餘空間）
         console_tools = tk.Frame(left_frame, bg="#1e1e1e")
@@ -410,6 +423,25 @@ class RocketDashboardApp:
         ttk.Button(console_tools, text="🧲 磁強計校正與鎖定", width=18, command=self.open_mag_calibration).pack(side=tk.LEFT, padx=5)
         self.lbl_drops = tk.Label(console_tools, text="EKF Queue Drops: 0", bg="#1e1e1e", fg="#aaaaaa", font=("Monaco", 9))
         self.lbl_drops.pack(side=tk.RIGHT, padx=10)
+
+        # --- 手動指令列：自己打指令送到航電板（回應會隨遙測串流進終端）---
+        cmd_bar = tk.Frame(left_frame, bg="#1e1e1e")
+        cmd_bar.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=(0, 4))
+        tk.Label(cmd_bar, text="指令 ➤", bg="#1e1e1e", fg="#00d2ff",
+                 font=("Monaco", 10, "bold")).pack(side=tk.LEFT, padx=(6, 4))
+        self._cmd_history = []
+        self._cmd_history_idx = 0
+        self.cmd_entry = tk.Entry(cmd_bar, bg="#0e0e0e", fg="#33ff33",
+                                  insertbackground="white", font=("Monaco", 10),
+                                  relief="flat", highlightthickness=1,
+                                  highlightbackground="#333333", highlightcolor="#00d2ff")
+        self.cmd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.cmd_entry.bind("<Return>", self._on_manual_cmd)
+        self.cmd_entry.bind("<Up>", self._manual_cmd_history_prev)
+        self.cmd_entry.bind("<Down>", self._manual_cmd_history_next)
+        ttk.Button(cmd_bar, text="送出", width=8, command=self._on_manual_cmd).pack(side=tk.LEFT, padx=4)
+        tk.Button(cmd_bar, text="help", bg="#2a2a2a", fg="#cccccc", relief="flat",
+                  font=("Monaco", 9), command=lambda: self.send_command("help")).pack(side=tk.LEFT, padx=(2, 4))
 
         # 終端文本框，設定為深色主題
         self.console = ScrolledText(left_frame, bg="#101010", fg="#33ff33", insertbackground="white", font=("Monaco", 9), borderwidth=0, highlightthickness=0)
@@ -478,6 +510,8 @@ class RocketDashboardApp:
 
     def clear_console(self):
         self.console.delete("1.0", tk.END)
+        if hasattr(self, 'event_console'):
+            self.event_console.delete("1.0", tk.END)
 
     def toggle_pause(self):
         self.paused = not self.paused
@@ -934,13 +968,49 @@ class RocketDashboardApp:
                 
             self.console.see(tk.END)
             
-            # 解析並處理特殊遙測數據
-            self.parse_telemetry(line)
+            # 指令/回應分流 + 解析（單行出錯不得中斷輪詢，否則 poll_queue 停止重排→GUI 凍結）
+            try:
+                if self._is_event_line(line):
+                    self._event_log(f"[{ts}] {line}", self._event_tag(line))
+                self.parse_telemetry(line)
+            except Exception as e:
+                try:
+                    self.console.insert(tk.END, f"[GUI] ⚠ 處理行例外: {e}\n", "err")
+                    self.console.see(tk.END)
+                except Exception:
+                    pass
             
         # 繼續定時輪詢
         try:
             if self.root.winfo_exists():
                 self.root.after(10, self.poll_queue)
+        except tk.TclError:
+            pass
+
+    # ------------------ 指令/回應區（只收 CMD 與指令回應） ------------------
+    # 白名單：使用者送出的 [CMD] + 韌體對「指令」的回應標籤。開機/角色/系統/遙測一律不進。
+    _EVENT_KEEP_TAGS = ("[CMD]", "[CAL]", "[E22]", "[E80]", "[LORA433]")
+
+    def _is_event_line(self, line):
+        """只有使用者指令與其回應才進「指令/回應」區。"""
+        return bool(line) and any(tag in line for tag in self._EVENT_KEEP_TAGS)
+
+    def _event_tag(self, line):
+        if "[CMD]" in line:
+            return "cmd"
+        if "ERROR" in line or "FAIL" in line or "❌" in line:
+            return "err"
+        return "resp"
+
+    def _event_log(self, text, tag="resp"):
+        """寫入重要訊息區（若已建立）；截斷上限 800 行、自動捲到底。"""
+        if not hasattr(self, 'event_console'):
+            return
+        try:
+            self.event_console.insert(tk.END, text + "\n", tag)
+            if float(self.event_console.index('end-1c')) > 800.0:
+                self.event_console.delete("1.0", "100.0")
+            self.event_console.see(tk.END)
         except tk.TclError:
             pass
 
@@ -1121,10 +1191,22 @@ class RocketDashboardApp:
             m = re.search(r"offset\[X,Y,Z\]=(-?\d+),(-?\d+),(-?\d+)", line)
             if m:
                 self.board_mag_offsets = [float(m.group(1)), float(m.group(2)), float(m.group(3))]
-        elif "[CAL] Mag hard-iron offset saved to Flash:" in line:
-            m = re.search(r"saved to Flash:\s*(-?[\d\.]+),\s*(-?[\d\.]+),\s*(-?[\d\.]+)", line)
+        elif "[CAL] Mag hard-iron offset saved to Flash" in line:
+            # 韌體格式（ekf.c:1303）：
+            #   [CAL] Mag hard-iron offset saved to Flash (x10): <x*10>, <y*10>, <z*10>
+            # 值是實際 counts 的 10 倍（整數傳輸保一位小數），需 ÷10 還原。
+            m = re.search(r"saved to Flash \(x10\):\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)", line)
             if m:
-                self.board_mag_offsets = [float(m.group(1)), float(m.group(2)), float(m.group(3))]
+                self.board_mag_offsets = [int(m.group(1)) / 10.0,
+                                          int(m.group(2)) / 10.0,
+                                          int(m.group(3)) / 10.0]
+                self._on_mag_write_confirmed()
+        elif "[CAL] EKF Mag Yaw Lock set to:" in line:
+            m = re.search(r"Mag Yaw Lock set to:\s*(\d+)", line)
+            if m:
+                self._on_yaw_lock_confirmed(int(m.group(1)) != 0)
+        elif "[CAL] ERROR" in line:
+            self._on_mag_write_failed(line)
 
     # ------------------ 3D 繪圖更新 ------------------
     def update_3d_plot(self, q):
@@ -1310,22 +1392,81 @@ class RocketDashboardApp:
             except: pass
         self.root.destroy()
         
+    # 板端命令台是 osPriorityLow 的 ~20ms 輪詢 + 硬體僅 1 byte 緩衝：整串 burst 送會
+    # 掉字元（見 mag_calibrate.py 實測，30ms/字仍掉、100ms/字可靠）→ 命令組不起來、
+    # 板子毫無回應。故改用背景執行緒逐字慢送，不阻塞 GUI 主迴圈。
+    CMD_CHAR_GAP = 0.1   # 秒/字
+
     def send_command(self, cmd_str):
         if not self.running or not hasattr(self, 'ser') or not self.ser:
             messagebox.showwarning("警告", "串口未連接！請先連線。")
             return False
-        try:
-            if not cmd_str.endswith('\n'):
-                cmd_str += '\n'
-            self.ser.write(cmd_str.encode('utf-8'))
-            self.ser.flush()
-            # 輸出至本地終端 console
-            self.console.insert(tk.END, f"[CMD] ➡️ {cmd_str.strip()}\n", "rate")
-            self.console.see(tk.END)
-            return True
-        except Exception as e:
-            messagebox.showerror("錯誤", f"發送指令失敗: {e}")
-            return False
+        if not cmd_str.endswith('\n'):
+            cmd_str += '\n'
+        # 前置換行：先終止板端命令緩衝 g_cmd_buf 內殘留的半截命令（來自過去 burst 送掉字
+        # 的殘骸），讓本命令從乾淨狀態開始組裝，避免「垃圾+命令」黏在一起解析失敗。
+        cmd_str = '\n' + cmd_str
+        # 逐字慢送（背景執行緒）：避免板端命令台掉字元。
+        if not hasattr(self, '_tx_queue'):
+            self._tx_queue = queue.Queue()
+        if getattr(self, '_tx_thread', None) is None or not self._tx_thread.is_alive():
+            self._tx_thread = threading.Thread(target=self._tx_worker, daemon=True)
+            self._tx_thread.start()
+        self._tx_queue.put(cmd_str)
+        # 本地回顯（指令/回應區 + 完整終端）立即顯示；實際位元由背景慢送（數秒）。
+        self.console.insert(tk.END, f"[CMD] ➡️ {cmd_str.strip()}（背景慢送中…）\n", "rate")
+        self.console.see(tk.END)
+        self._event_log(f"[CMD] ➡️ {cmd_str.strip()}", "cmd")
+        return True
+
+    def _tx_worker(self):
+        """背景逐字慢送佇列中的命令（CMD_CHAR_GAP 秒/字），遷就板端低優先權命令輪詢。"""
+        while True:
+            cmd = self._tx_queue.get()
+            if cmd is None:
+                return
+            data = cmd.encode('utf-8')
+            for i in range(len(data)):
+                if not self.running or not getattr(self, 'ser', None):
+                    break
+                try:
+                    self.ser.write(data[i:i + 1])
+                    self.ser.flush()
+                except Exception:
+                    break
+                time.sleep(self.CMD_CHAR_GAP)
+
+    # ------------------ 手動指令列 ------------------
+    def _on_manual_cmd(self, event=None):
+        """送出手動輸入的原始指令；回應會隨遙測串流進終端。"""
+        cmd = self.cmd_entry.get().strip()
+        if not cmd:
+            return "break"
+        if self.send_command(cmd):
+            if not self._cmd_history or self._cmd_history[-1] != cmd:
+                self._cmd_history.append(cmd)
+            self._cmd_history_idx = len(self._cmd_history)
+            self.cmd_entry.delete(0, tk.END)
+        return "break"
+
+    def _manual_cmd_history_prev(self, event=None):
+        """↑：回上一條送過的指令。"""
+        if not self._cmd_history:
+            return "break"
+        self._cmd_history_idx = max(0, self._cmd_history_idx - 1)
+        self.cmd_entry.delete(0, tk.END)
+        self.cmd_entry.insert(0, self._cmd_history[self._cmd_history_idx])
+        return "break"
+
+    def _manual_cmd_history_next(self, event=None):
+        """↓：往下一條；到底則清空輸入框。"""
+        if not self._cmd_history:
+            return "break"
+        self._cmd_history_idx = min(len(self._cmd_history), self._cmd_history_idx + 1)
+        self.cmd_entry.delete(0, tk.END)
+        if self._cmd_history_idx < len(self._cmd_history):
+            self.cmd_entry.insert(0, self._cmd_history[self._cmd_history_idx])
+        return "break"
 
     # ==================== 角色自動偵測（主航電/備援航電/地面站） ====================
     ROLE_STYLES = {
@@ -1443,6 +1584,25 @@ class RocketDashboardApp:
             if m.group(4):
                 self.lora_e22_state["air_rate"] = m.group(4)
             self.refresh_lora_panel_values()
+            return
+
+        # E22 功率設定成功回報: [E22] pwr set level 3 OK （韌體只回等級，換算成 dBm 顯示）
+        m = re.search(r"\[E22\] pwr set level (\d+) OK", line)
+        if m:
+            lvl = int(m.group(1))
+            if 0 <= lvl < len(self.E22_PWR_LEVELS):
+                self.lora_e22_state["power"] = self.E22_PWR_LEVELS[lvl][0].split("=")[-1].strip()
+            self.refresh_lora_panel_values()
+            return
+
+        # E22 空速設定成功回報: [E22] air rate set 2 OK（兩端須一致）
+        m = re.search(r"\[E22\] air rate set (\d+) OK", line)
+        if m:
+            ar = int(m.group(1))
+            if 0 <= ar < len(self.E22_AIR_RATES):
+                self.lora_e22_state["air_rate"] = self.E22_AIR_RATES[ar][0].split("=")[-1].strip()
+            self.refresh_lora_panel_values()
+            return
 
     # ==================== LoRa 參數設定面板 ====================
     # 可調範圍（與 firmware 檢查一致；顯示於 GUI 並用於本地預檢）
@@ -2000,7 +2160,9 @@ class RocketDashboardApp:
         self.calib_win.configure(bg="#1c1c1c")
         self.calib_win.transient(self.root)
         self.calib_win.grab_set()
-        
+        # 關窗時保證恢復 1Hz（否則板子會卡在 10Hz 提速模式）
+        self.calib_win.protocol("WM_DELETE_WINDOW", self._close_mag_calibration)
+
         # 重設校正收集狀態
         self.calib_x = []
         self.calib_y = []
@@ -2065,7 +2227,12 @@ class RocketDashboardApp:
         
         # EKF 鎖定選項
         tk.Label(right_frame, text="EKF 絕對磁北航向鎖定", bg="#222222", fg="#00d2ff", font=("Helvetica", 10, "bold")).pack(anchor="w", padx=15, pady=2)
-        
+
+        # 目前鎖定狀態：韌體無查詢命令，開窗先顯示預設 (g_mag_yaw_lock=1)，收到 [CAL] 回傳才轉「已確認」
+        self.lbl_yaw_lock = tk.Label(right_frame, text="磁北鎖定：🔒 開（預設，未確認）",
+                                     bg="#222222", fg="#888888", font=("Helvetica", 9), anchor="w")
+        self.lbl_yaw_lock.pack(anchor="w", padx=15, pady=(0, 4))
+
         btn_yaw_frame = tk.Frame(right_frame, bg="#222222")
         btn_yaw_frame.pack(fill=tk.X, padx=15, pady=5)
         
@@ -2077,13 +2244,19 @@ class RocketDashboardApp:
         # 啟動定時繪圖更新
         self.update_calib_plot()
 
+        # 開窗即把 [MAG] 提速到 50Hz（CMD_MAG_CAL_START），整個校正過程都快；關窗恢復 1Hz。
+        # ⚠ 需板子韌體已具備 fast-print（g_mag_cal_fast_print，見 main.c，目前僅在未 commit
+        #   的工作區）。若板子燒的是舊韌體，此指令會被忽略，[MAG] 維持 1Hz。
+        self.send_command("CMD_MAG_CAL_START")
+
     def toggle_collecting(self):
+        # 印出提速（CMD_MAG_CAL_START/STOP）已改由開/關校正視窗管理；這裡只切換是否收點。
         self.collecting_data = not self.collecting_data
         if self.collecting_data:
             self.btn_toggle_collect.config(text="停止收集數據")
             self.calib_x = []
             self.calib_y = []
-            self.lbl_fit_results.config(text="擬合結果:\n  (正在收集數據，請旋轉航電板一整圈...)", fg="#ffcc00")
+            self.lbl_fit_results.config(text="擬合結果:\n  (收集中，請旋轉航電板一整圈...)", fg="#ffcc00")
             self.btn_write_calib.config(state=tk.DISABLED)
         else:
             self.btn_toggle_collect.config(text="開始收集數據")
@@ -2105,9 +2278,19 @@ class RocketDashboardApp:
         self.calib_ax.tick_params(colors="#aaaaaa")
         self.calib_canvas.draw()
 
+    def _close_mag_calibration(self):
+        """關閉校正視窗：恢復 [MAG] 1Hz（CMD_MAG_CAL_STOP），再關窗。"""
+        self.collecting_data = False
+        self.send_command("CMD_MAG_CAL_STOP")
+        try:
+            self.calib_win.grab_release()
+        except Exception:
+            pass
+        self.calib_win.destroy()
+
     def fit_mag_circle(self):
         if len(self.calib_x) < 10:
-            messagebox.showwarning("警告", "收集的數據點太少（至少需要10點以上，建議順時針/逆時針旋轉一整圈）。")
+            messagebox.showwarning("警告", "收集的數據點太少（至少需要10點以上，建議順時針/逆時針旋轉一整圈）。", parent=self.calib_win)
             return
             
         try:
@@ -2122,11 +2305,17 @@ class RocketDashboardApp:
             cy_fit = res[1] / 2.0
             R_fit = np.sqrt(res[2] + cx_fit**2 + cy_fit**2)
             
-            current_ox = self.board_mag_offsets[0]
-            current_oy = self.board_mag_offsets[1]
-            
-            new_ox = current_ox + cx_fit * 16.384
-            new_oy = current_oy - cy_fit * 16.384
+            current_ox = self.board_mag_offsets[0]   # 晶片 X 軸 offset (counts)
+            current_oy = self.board_mag_offsets[1]   # 晶片 Y 軸 offset (counts)
+
+            # calib_x/y 收的是 body 軸 (mx_body, my_body)，但 offset[] 是晶片軸。
+            # 依 sensor_axis.h：mx_body=+chipY、my_body=−chipX ⇒ body 圓心 (cx,cy)
+            # 還原到晶片軸為 chipX_center=−cy、chipY_center=+cx；
+            # 去硬鐵 new_offset = old_offset + center_counts（gauss=(raw−offset)/LSB）。
+            # 16.384 = 16384 counts/Gauss ÷ 1000 = counts/mG。
+            # ⚠ 方向依當前韌體映射推導，建議上板轉一圈看 heading 收斂方向再定案。
+            new_ox = current_ox - cy_fit * 16.384   # 晶片 X ← −cy
+            new_oy = current_oy + cx_fit * 16.384   # 晶片 Y ← +cx
             
             self.lbl_fit_results.config(
                 text=f"擬合結果:\n"
@@ -2145,7 +2334,7 @@ class RocketDashboardApp:
             self.btn_write_calib.config(state=tk.NORMAL)
             
         except Exception as e:
-            messagebox.showerror("錯誤", f"擬合計算失敗: {e}")
+            messagebox.showerror("錯誤", f"擬合計算失敗: {e}", parent=self.calib_win)
 
     def draw_fit_circle(self, cx, cy, R):
         theta = np.linspace(0, 2*np.pi, 100)
@@ -2174,31 +2363,89 @@ class RocketDashboardApp:
             return
             
         new_oz = self.board_mag_offsets[2]
-        
-        cmd = f"CMD_MAG_CAL:{self.new_ox:.1f},{self.new_oy:.1f},{new_oz:.1f}"
+
+        # 韌體 CMD_MAG_CAL 只接受「整數 raw ADC counts」（main.c:2399 sscanf %ld；
+        # nano.specs 不支援 %f，送浮點會被拒收）。故一律取整數。
+        ox, oy, oz = int(round(self.new_ox)), int(round(self.new_oy)), int(round(new_oz))
+        cmd = f"CMD_MAG_CAL:{ox},{oy},{oz}"
         if self.send_command(cmd):
-            messagebox.showinfo("成功", f"地磁偏置寫入指令已發送！\n偏置: X={int(self.new_ox)}, Y={int(self.new_oy)}, Z={int(new_oz)}")
+            # 不在此宣告成功：等韌體回傳 [CAL] ... saved to Flash (x10) 由序列解析
+            # (_on_mag_write_confirmed) 才確認，避免「送出＝成功」的假象。
+            self._pending_mag_write = (ox, oy, oz)
             self.lbl_board_offsets.config(
-                text=f"當前板載偏置 (Counts):\n  X={int(self.new_ox)}, Y={int(self.new_oy)}, Z={int(new_oz)}"
+                text=f"當前板載偏置 (Counts):\n  X={ox}, Y={oy}, Z={oz}  ⏳ 等待韌體寫入確認…",
+                fg="#ffcc00"
             )
+            self._arm_mag_write_timeout()
 
     def toggle_mag_yaw_lock(self, enable):
         val = 1 if enable else 0
         cmd = f"CMD_MAG_YAW_LOCK:{val}"
         if self.send_command(cmd):
-            status = "啟用" if enable else "停用"
-            messagebox.showinfo("成功", f"EKF 絕對磁北鎖定{status}指令已發送！")
+            # 不樂觀報成功：等韌體 [CAL] EKF Mag Yaw Lock set to: N 回傳再確認。
+            self._pending_yaw_lock = enable
+            if hasattr(self, 'lbl_yaw_lock') and self.lbl_yaw_lock.winfo_exists():
+                status = "啟用" if enable else "停用"
+                self.lbl_yaw_lock.config(text=f"磁北鎖定：⏳ 等待韌體確認{status}…", fg="#ffcc00")
+
+    def _on_yaw_lock_confirmed(self, locked):
+        """收到韌體 [CAL] EKF Mag Yaw Lock set to: N 確認：更新狀態顯示。"""
+        if hasattr(self, 'lbl_yaw_lock') and self.lbl_yaw_lock.winfo_exists():
+            if locked:
+                self.lbl_yaw_lock.config(text="磁北鎖定：🔒 開（已確認）", fg="#28a745")
+            else:
+                self.lbl_yaw_lock.config(text="磁北鎖定：🔓 關（已確認）", fg="#ff9500")
+        self.console.insert(tk.END, f"[CAL] ✅ 磁北鎖定已{'開啟' if locked else '關閉'}\n", "ok")
+        self.console.see(tk.END)
+        self._pending_yaw_lock = None
 
     def reset_mag_calibration(self):
-        if messagebox.askyesno("確認", "是否確定要重置地磁偏置至預設值 (131072)？"):
+        if messagebox.askyesno("確認", "是否確定要重置地磁偏置至預設值 (131072)？", parent=self.calib_win):
             cmd = "CMD_MAG_CAL:131072,131072,131072"
             if self.send_command(cmd):
-                self.board_mag_offsets = [131072.0, 131072.0, 131072.0]
-                self.lbl_board_offsets.config(
-                    text=f"當前板載偏置 (Counts):\n  X=131072, Y=131072, Z=131072"
-                )
+                # 同 write：等韌體 [CAL] 回傳才確認（見 _on_mag_write_confirmed）。
+                self._pending_mag_write = (131072, 131072, 131072)
                 self.clear_calib_data()
-                messagebox.showinfo("成功", "已發送重置地磁偏置指令！")
+                self.lbl_board_offsets.config(
+                    text="當前板載偏置 (Counts):\n  X=131072, Y=131072, Z=131072  ⏳ 等待韌體寫入確認…",
+                    fg="#ffcc00"
+                )
+                self._arm_mag_write_timeout()
+
+    # ------------------ 地磁偏置寫入確認（由 poll_queue 序列回呼，主執行緒） ------------------
+    # ⚠ 這些在序列處理迴圈中被呼叫，絕不可跳 modal messagebox：校正視窗持有 grab_set()，
+    #   對話框會被蓋在後面又搶不到輸入 → 整個 GUI 死鎖。一律只更新非阻塞標籤。
+    #   原始 [CAL] 行本身已由 poll_queue 分流顯示在「重要訊息」區，不需再彈窗。
+    def _on_mag_write_confirmed(self):
+        ox, oy, oz = (int(round(v)) for v in self.board_mag_offsets)
+        if hasattr(self, 'lbl_board_offsets') and self.lbl_board_offsets.winfo_exists():
+            self.lbl_board_offsets.config(
+                text=f"當前板載偏置 (Counts):\n  X={ox}, Y={oy}, Z={oz}  ✅ 已寫入 Flash",
+                fg="#28a745"
+            )
+        self._pending_mag_write = None
+
+    def _on_mag_write_failed(self, line):
+        if hasattr(self, 'lbl_board_offsets') and self.lbl_board_offsets.winfo_exists():
+            self.lbl_board_offsets.config(text="⚠ 韌體回報寫入失敗，詳見重要訊息區", fg="#dc3545")
+        self._pending_mag_write = None
+
+    def _arm_mag_write_timeout(self):
+        """3 秒未收到 [CAL] 寫入確認就提示（板子韌體可能較舊/指令被拒），不再永遠卡在 ⏳。"""
+        self._mag_write_token = getattr(self, '_mag_write_token', 0) + 1
+        tok = self._mag_write_token
+        try:
+            self.root.after(3000, lambda: self._check_mag_write_timeout(tok))
+        except Exception:
+            pass
+
+    def _check_mag_write_timeout(self, tok):
+        if tok == getattr(self, '_mag_write_token', 0) and getattr(self, '_pending_mag_write', None) is not None:
+            self._pending_mag_write = None
+            if hasattr(self, 'lbl_board_offsets') and self.lbl_board_offsets.winfo_exists():
+                self.lbl_board_offsets.config(
+                    text="⚠ 未收到韌體寫入確認\n（板子韌體可能較舊，或指令被拒，見重要訊息區）",
+                    fg="#dc3545")
 
     def update_calib_plot(self):
         if not hasattr(self, 'calib_win') or not self.calib_win.winfo_exists():

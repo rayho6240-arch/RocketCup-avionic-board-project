@@ -51,17 +51,40 @@
 #define FEATURE_LORA   (IS_PRIMARY || IS_GROUND)  /* LoRa 硬體 init：E22 433(UART3) + E80 920(SPI3) */
 #define FEATURE_LORA_TX IS_PRIMARY                /* 下行遙測「發送」：僅主航電 */
 #define FEATURE_LORA_RX IS_GROUND                 /* 下行遙測「接收」：僅地面站 */
-#define FEATURE_FLASH   0                         /* 獨立測試 920MHz：暫時關閉 W25Q128 Flash */
+#define FEATURE_FLASH   1                         /* 電梯場測：開啟記錄，無法全程接筆電監看時事後回放用 */
 #ifndef FEATURE_HOTSTART
 #define FEATURE_HOTSTART 0                        /* 暫時關閉空中熱啟動恢復機制 */
 #endif
 #define FEATURE_BUZZER  1                         /* 蜂鳴器開關（1=開啟，0=靜音以防測試時噪音過大） */
-#define FEATURE_FORCE_BARO_ONLY 1                 /* [TEST ONLY] 1 = 強制狀態機使用純氣壓降級鏈（全靠 Baro，忽略 EKF） */
+
+/* === 飛行 profile：場測（電梯）與真實飛行的門檻/降級鏈切換 ===
+ * 電梯場測（垂直電梯井道，無法完整重現彈道）沿用真實飛行同一份 FSM，但頂樓僅
+ * 30m、全程等速 1g、不具備真實加速度剖面，因此需要一組縮放後的門檻（見
+ * fsm.h 內以本旗標分組的 #if/#else 常數表）並強制走純氣壓降級鏈（電梯無法讓
+ * EKF 觀察到有意義的水平/垂直運動特徵，硬套用 EKF 路徑只會誤判）。
+ *   0 = 飛行 profile（預設，真實彈道門檻 + EKF 路徑正常參與）
+ *   1 = 電梯測試 profile（門檻縮放 + 強制 baro 降級鏈） */
+#ifndef FLIGHT_PROFILE_ELEVATOR
+#define FLIGHT_PROFILE_ELEVATOR 1
+#endif
+
+/* FEATURE_FORCE_BARO_ONLY 由 FLIGHT_PROFILE_ELEVATOR 推導：電梯 profile 全程強制
+ * 狀態機使用純氣壓降級鏈（全靠 Baro，忽略 EKF 的高度/速度判定）；飛行 profile
+ * 則讓 EKF 三路徑正常參與（P0-C 健康降級照常以 EKF_GetHealthBits() 判斷）。 */
+#define FEATURE_FORCE_BARO_ONLY FLIGHT_PROFILE_ELEVATOR
+
+/* === 垂直通道 Kalman 濾波器（vertical_filter.h，Schultz 火箭高度計架構） ===
+ *   FEATURE_VFILTER      = 1：編譯並執行濾波器，1Hz 與 EKF 對照列印（供 A/B 比較）。
+ *   FEATURE_VFILTER_FSM  = 1：【已啟用】VF 為開傘主估計器——FSM 的 h_est/v_est 直接
+ *                             取自本濾波器，兩 profile 皆同；EKF 僅供姿態/遙測/記錄。
+ *                             改用獨立垂直通道的動機：EKF 垂直速度靜置/地面實測會漂移。 */
+#define FEATURE_VFILTER      1
+#define FEATURE_VFILTER_FSM  1
 
 /* 開傘（PWM 舵機）地面自測：設 1 → 每次重啟自動跑一次舵機釋放序列後停住，不進飛控。
  * 台面測試專用，飛行前務必設回 0。詳見 pyro_selftest.h（含刪除方式）。 */
 #ifndef FEATURE_PYRO_SELFTEST
-#define FEATURE_PYRO_SELFTEST 0
+#define FEATURE_PYRO_SELFTEST 1
 #endif
 
 /* 上行手動開傘：地面站經 433 反向打命令，火箭在下行之外空出 1/10 時槽接收。

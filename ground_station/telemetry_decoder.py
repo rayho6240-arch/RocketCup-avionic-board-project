@@ -46,7 +46,7 @@ assert len(_FIELDS) == len(_STRUCT_FMT.replace("<", "").replace("4B", "BBBB")
                            .replace("2B", "BB").replace("3H", "HHH")
                            .replace("3B", "BBB"))
 
-FSM_NAMES = ["INIT", "PAD", "BOOST", "COAST", "APOGEE", "DESCENT", "MAIN", "LANDED"]
+FSM_NAMES = ["INIT", "PAD", "BOOST", "COAST", "DEPLOY_DROGUE", "APOGEE", "DESCENT", "MAIN", "LANDED"]
 FLAG_NAMES = [
     (0x01, "DROGUE"), (0x02, "MAIN"), (0x04, "SD"), (0x08, "GPS_STALE"),
     (0x10, "EKF_UNHEALTHY"), (0x20, "SENSOR_FAULT"), (0x40, "FAILSAFE"), (0x80, "HOTSTART"),
