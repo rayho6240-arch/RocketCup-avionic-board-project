@@ -1,5 +1,5 @@
 /*
- * pyro_selftest.c — 開傘地面點火自測（雙板協調；副板被動、由主板命令）
+ * pyro_selftest.c — 開傘地面點火自測（對稱：主/副兩板同一序列，重啟後跑一次）
  * 詳見 pyro_selftest.h 的序列 / 腳位 / 啟用 / 刪除說明。整檔以 FEATURE_PYRO_SELFTEST 包住。
  */
 #include "pyro_selftest.h"
@@ -7,11 +7,8 @@
 #if FEATURE_PYRO_SELFTEST
 
 #include <stdio.h>
-#include <string.h>
 #include "main.h"        /* FIRE(PD13) / PWM_Servo(PD14) / LED_SYS(PE2) / LED_STAT2(PE4) 腳位 */
-#include "fsm.h"         /* FSM_DROGUE_MOTOR_RUN_MS(主板 8s 馬達) / FSM_IGNITER_PULSE_MS(副板點火頭) */
-#include "link_hw.h"     /* Link_Init / Link_SendStatus / Link_GetPeer（雙板協調命令通道） */
-#include "telemetry.h"   /* TELEM_FLAG_MAIN_DEPLOYED（主板命令副板點火的旗標語意） */
+#include "fsm.h"         /* FSM_DROGUE_MOTOR_RUN_MS：副傘 DC 馬達導通時間（與飛行一致，8s） */
 
 /* 由 main.c 建立的周邊 handle。 */
 extern TIM_HandleTypeDef  htim2;   /* Buzzer   : TIM2 CH1 */
@@ -55,38 +52,19 @@ static void buzzer_beep(uint32_t ms)
     htim2.Instance->CCR1 = 0U;
 }
 
-#if FEATURE_LINK
-/* 主板：組一筆「命令副板點火」封包（flags 帶 MAIN_DEPLOYED＝副板 peer_main_cmd）。
- * fsm_state 帶 STATE_MAIN_DEPLOY 以與飛行時的狀態跟隨語意一致（副板 latch main_latched）。 */
-static void link_send_fire_cmd(void)
-{
-    LinkStatus_t cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.board_id  = LINK_BOARD_PRIMARY;
-    cmd.fsm_state = (uint8_t)STATE_MAIN_DEPLOY;
-    cmd.flags     = TELEM_FLAG_MAIN_DEPLOYED;   /* ＝命令副板點火頭 */
-    Link_SendStatus(&cmd);
-}
-#endif
-
 void PyroSelfTest_RunOnce(void)
 {
-    const char *role = IS_BACKUP ? "BACKUP(副航電)" : "PRIMARY(主航電)";
     printf("\r\n============================================================\r\n");
-    printf("[PYRO-SELFTEST] 開傘電火自測（雙板協調，角色=%s，每次重啟跑一次）\r\n", role);
-#if IS_BACKUP
-    printf("[PYRO-SELFTEST] 副板：被動等主板命令(MAIN_DEPLOYED)才點火頭 PD13 脈衝 %ums；不自主動作\r\n",
-           (unsigned)FSM_IGNITER_PULSE_MS);
-#else
-    printf("[PYRO-SELFTEST] 主板：PD13 馬達 %ums → 等 %ums → 舵機 0°→180°(停 %ums)→0°，"
-           "啟動 servo 同時廣播命令通知副板點火\r\n",
+    printf("[PYRO-SELFTEST] 開傘電火自測（主/副同序列，每次重啟跑一次）\r\n");
+    printf("[PYRO-SELFTEST] 序列：PD13 副傘馬達 %ums → 等 %ums → 舵機 0°→180°(停 %ums)→0°\r\n",
            (unsigned)FSM_DROGUE_MOTOR_RUN_MS, (unsigned)PYRO_SELFTEST_GAP_MS,
            (unsigned)PYRO_SELFTEST_SERVO_HOLD_MS);
-#endif
-    printf("[PYRO-SELFTEST] ⚠ 會實際導通引爆 MOSFET，確認負載安全再繼續！(需 USART2 交叉排線接兩板)\r\n");
+    printf("[PYRO-SELFTEST] LED: SYS(PE2)閃 / State1(PE3)=PD13高 / State2(PE4)=舵機PWM\r\n");
+    printf("[PYRO-SELFTEST] ⚠ PD13 會實際導通引爆 MOSFET，確認負載安全再繼續！\r\n");
     fflush(stdout);
 
-    /* 起始安全狀態：FIRE 拉低、State1/State2 熄、SYS 起閃。 */
+    /* 起始安全狀態：FIRE 拉低、State1/State2 熄、SYS 起閃。
+     * PD14 已於 main.c Servo_HoldLow()（開機）拉為 GPIO 低，此處不動，維持部署前無訊號。 */
     HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_OFF);
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_OFF);
@@ -98,13 +76,6 @@ void PyroSelfTest_RunOnce(void)
     delay_fed(100U);
     buzzer_beep(PYRO_BUZZER_BEEP_MS);
 
-#if FEATURE_LINK
-    /* 板間鏈路上線（USART2 改 LINK_BAUD、啟動循環 DMA RX）：主板送命令、副板收命令。 */
-    Link_Init();
-    printf("[PYRO-SELFTEST] 板間鏈路已啟用（USART2@%u）\r\n", (unsigned)LINK_BAUD);
-    fflush(stdout);
-#endif
-
     /* 退避倒數（讓人員遠離點火頭/舵機連桿）。 */
     for (uint32_t s = PYRO_SELFTEST_COUNTDOWN_S; s > 0U; s--) {
         printf("[PYRO-SELFTEST] 點火倒數 %lu ...\r\n", (unsigned long)s);
@@ -112,33 +83,8 @@ void PyroSelfTest_RunOnce(void)
         delay_fed(1000U);
     }
 
-#if IS_BACKUP
-    /* ===== 副航電：被動。等主板命令(peer MAIN_DEPLOYED)才點火頭脈衝。單獨上電不動作。 ===== */
-  #if FEATURE_LINK
-    printf("[PYRO-SELFTEST] [副板] 等待主板命令中（不自主動作）...\r\n");
-    fflush(stdout);
-    while (!Link_GetPeer()->main_latched) {   /* 收到命令前一直等（＝不自主點火） */
-        delay_fed(50U);
-    }
-    printf("[PYRO-SELFTEST] [副板] 收到主板命令 → PD13 點火頭導通 %ums\r\n",
-           (unsigned)FSM_IGNITER_PULSE_MS);
-    fflush(stdout);
-    HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_ON);
-    HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);   /* 點火頭導通脈衝 */
-    delay_fed(FSM_IGNITER_PULSE_MS);
-    HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET); /* 脈衝結束放開 */
-    HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_OFF);
-    printf("[PYRO-SELFTEST] [副板] 點火頭脈衝完成。\r\n");
-    fflush(stdout);
-  #else
-    printf("[PYRO-SELFTEST] [副板] 未啟用 FEATURE_LINK → 無命令通道，副板不動作（設計如此）。\r\n");
-    fflush(stdout);
-  #endif
-
-#else
-    /* ===== 主航電：PD13 DC 馬達 8s → 等待 → 舵機掃描，啟動 servo 同時廣播命令。 ===== */
-    /* 步驟 1：PD13 (FIRE) 拉高 FSM_DROGUE_MOTOR_RUN_MS(8s)，State1 LED 亮 */
-    printf("[PYRO-SELFTEST] [1] PD13(FIRE)=HIGH（副傘 DC 馬達）+ State1 亮，維持 %ums\r\n",
+    /* === 步驟 1：PD13 (FIRE / 副傘 DC 馬達) 拉高 FSM_DROGUE_MOTOR_RUN_MS(8s)，State1 LED 亮 === */
+    printf("[PYRO-SELFTEST] [1] PD13(FIRE)=HIGH + State1 亮，維持 %ums\r\n",
            (unsigned)FSM_DROGUE_MOTOR_RUN_MS);
     fflush(stdout);
     HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_ON);
@@ -149,32 +95,30 @@ void PyroSelfTest_RunOnce(void)
     printf("[PYRO-SELFTEST] [1] PD13(FIRE)=LOW + State1 熄\r\n");
     fflush(stdout);
 
-    /* 步驟 2：等待 */
+    /* === 步驟 2：等待 === */
     printf("[PYRO-SELFTEST] [2] 等待 %ums\r\n", (unsigned)PYRO_SELFTEST_GAP_MS);
     fflush(stdout);
     delay_fed(PYRO_SELFTEST_GAP_MS);
 
-
-
-    /* 步驟 3：啟動舵機 PWM，且「同時」廣播命令通知副板點火（連續 2s 確保副板收到）。 */
-    printf("[PYRO-SELFTEST] [3] 舵機 PWM 啟動 + State2 亮 + 廣播點火命令：0°(%uus)→180°(%uus)\r\n",
+    /* === 步驟 3：PD14 由 GPIO 低切回 TIM4 AF，舵機 0°→180°→(停)→0°，PWM 期間 State2 LED 亮 ===
+     * 部署前 PD14 一直是硬體低；此處才切 AF 啟動 PWM（比照 main.c Servo_DeployMain 的紀律）。 */
+    {
+        GPIO_InitTypeDef gi = {0};
+        gi.Pin       = PWM_Servo_Pin;
+        gi.Mode      = GPIO_MODE_AF_PP;
+        gi.Pull      = GPIO_NOPULL;
+        gi.Speed     = GPIO_SPEED_FREQ_LOW;
+        gi.Alternate = GPIO_AF2_TIM4;
+        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);
+    }
+    printf("[PYRO-SELFTEST] [3] 舵機 PWM 啟動 + State2 亮：0°(%uus)→180°(%uus)\r\n",
            (unsigned)PYRO_SELFTEST_SERVO_0DEG_US, (unsigned)PYRO_SELFTEST_SERVO_180DEG_US);
     fflush(stdout);
+    servo_set_us(PYRO_SELFTEST_SERVO_0DEG_US);         /* 先定 0° 再啟 PWM，避免首幀跳到殘值 */
     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_ON);
-    servo_set_us(PYRO_SELFTEST_SERVO_0DEG_US);
-#if FEATURE_LINK
-    /* 啟動 servo 同時：連續廣播命令 2s（副板 main_latched 首收即鎖存）。 */
-    for (uint32_t t = 0U; t < 2000U; t += 50U) {
-        link_send_fire_cmd();
-        delay_fed(50U);
-    }
-#else
-    printf("[PYRO-SELFTEST] [3] （未啟用 FEATURE_LINK：不廣播命令，副板不會點火）\r\n");
-    fflush(stdout);
-    delay_fed(500U);                                   /* 先歸 0° 定位 */
-#endif
-    servo_set_us(PYRO_SELFTEST_SERVO_180DEG_US);
+    delay_fed(500U);                                   /* 歸 0° 定位 */
+    servo_set_us(PYRO_SELFTEST_SERVO_180DEG_US);       /* 轉 180° */
     delay_fed(PYRO_SELFTEST_SERVO_HOLD_MS);
     printf("[PYRO-SELFTEST] [3] 舵機 180°→0°(%uus)\r\n",
            (unsigned)PYRO_SELFTEST_SERVO_0DEG_US);
@@ -183,7 +127,6 @@ void PyroSelfTest_RunOnce(void)
     delay_fed(1000U);                                  /* 給舵機回程時間 */
     HAL_TIM_PWM_Stop(&htim4, TIM_CHANNEL_3);           /* 停 PWM */
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_OFF);
-#endif /* IS_BACKUP / PRIMARY */
 
     printf("[PYRO-SELFTEST] 完成。停在此處（SYS 續閃，不進飛控）——電源重置可再測一次。\r\n");
     fflush(stdout);

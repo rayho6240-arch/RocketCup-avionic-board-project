@@ -75,14 +75,6 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
 
     const uint8_t baro_ok = ((in->sensor_bits & FSM_SB_BARO_FAULT) == 0U);
 
-    /* baro 相對高度峰值：全程（所有狀態）追蹤，不僅 COAST。
-     * 用途：(1) COAST 頂點 baro 趨勢交叉檢查；(2) 副航電 300m 點火 arm 互鎖
-     *（max_alt_baro > TARGET_MAIN_ALTITUDE 才解鎖＝確實曾上到目標高度以上）。
-     * 置於狀態機與失效保護之前 → 即使 FSM_FollowPeerState 跳態，峰值仍持續累積。 */
-    if (baro_ok && in->baro_alt_rel > ctx->max_alt_baro) {
-        ctx->max_alt_baro = in->baro_alt_rel;
-    }
-
     /* === P0-B：頂點絕對失效保護（最後防線，不依賴任何感測器/EKF） ===
      * BOOST 與 COAST 皆生效：即使燒完判定失效卡在 BOOST、或 EKF 向上發散使
      * 頂點條件永不成立，起飛後 FSM_FAILSAFE_APOGEE_MS 仍強制點火副傘。 */
@@ -233,22 +225,9 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
                 float v_fall = (v_est < 0.0f) ? -v_est : 0.0f;
                 float h_trigger_main = TARGET_MAIN_ALTITUDE + v_fall * MAIN_DEPLOY_DELAY_S;
                 main_trigger = (h_est <= h_trigger_main) ? 1U : 0U;
-            } else {
-                /* baro-only 降級路徑（副航電恆走此路；主板 EKF 失效時亦降級至此）。
-                 * 門檻 FSM_BARO_MAIN_DEPLOY_ALT_M 角色分流：副板=TARGET_MAIN_ALTITUDE(300m)，
-                 * 主板=FSM_FB_MAIN_ALT_M(200m 保守固定)。 */
-                uint8_t baro_low = (baro_ok &&
-                                    in->baro_alt_rel <= FSM_BARO_MAIN_DEPLOY_ALT_M) ? 1U : 0U;
-#if IS_BACKUP
-                /* 副航電 300m 點火：自身 baro≤目標 或 主板命令(peer_main_cmd) 皆可觸發，
-                 * 但一律受 arm 互鎖 —— 需 baro 峰值曾 > TARGET_MAIN_ALTITUDE（確實上到目標高度
-                 * 以上再回落），pad 上 baro≈0 永不解鎖 → 杜絕地面/誤跟隨/誤命令誤點火。 */
-                uint8_t armed = (ctx->max_alt_baro > TARGET_MAIN_ALTITUDE) ? 1U : 0U;
-                main_trigger = (armed && (baro_low || in->peer_main_cmd)) ? 1U : 0U;
-#else
-                /* 主板 EKF 失效降級：沿用原行為（純 baro 門檻，無 arm/命令路徑）。 */
-                main_trigger = baro_low;
-#endif
+            } else if (baro_ok) {
+                /* P0-C 降級：baro 相對高度 ≤ 200m（150m 目標 + 下降速度餘裕的固定值） */
+                main_trigger = (in->baro_alt_rel <= FSM_FB_MAIN_ALT_M) ? 1U : 0U;
             }
 
             // 觸發條件：高度低於觸發高度，或是飛行總時間看門狗超時 (25秒)
@@ -305,21 +284,4 @@ FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in)
     ctx->last_vel_z = v_est; // 儲存速度歷史
 
     return act;
-}
-
-void FSM_FollowPeerState(FSM_Context_t *ctx, uint8_t peer_state, uint32_t now_ms)
-{
-    /* 上限 STATE_DESCENT：300m 主傘點火始終由副板自身 baro（或 peer_main_cmd）在
-     * STATE_DESCENT 決定，主板不能藉狀態跟隨把副板直接推進到 MAIN_DEPLOY 而點火。 */
-    FlightState_t target = (FlightState_t)peer_state;
-    if (target > STATE_DESCENT) {
-        target = STATE_DESCENT;
-    }
-
-    /* forward-only：僅在對端狀態較前、且本板已離開 PAD（自身已確認起飛，state >= BOOST）
-     * 時才前推 —— 防 pad 上收到偽封包把副板推進下降段而在低空誤點火（另有 arm 互鎖兜底）。 */
-    if (ctx->state >= STATE_BOOST && target > ctx->state) {
-        ctx->state            = target;
-        ctx->state_entered_ms = now_ms;
-    }
 }

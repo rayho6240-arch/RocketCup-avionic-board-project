@@ -105,4 +105,17 @@ uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len)
     return USBD_CDC_TransmitPacket(&hUsbDeviceFS);
 }
 
+uint8_t CDC_TxBusy(void)
+{
+    /* 前一筆 CDC 傳輸是否仍在進行（非同步，經 IN 端點中斷清除 TxState）。
+     * 未列舉/未連線（pClassData 為 NULL）視為「不忙」，讓呼叫端據此直接放行/交由
+     * CDC_Transmit_FS 回 USBD_FAIL。printf 直通 USB（見 main.c _write）用它判斷共用
+     * 靜態緩衝是否可安全覆寫。 */
+    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
+    if (hcdc == NULL) {
+        return 0U;
+    }
+    return (hcdc->TxState != 0U) ? 1U : 0U;
+}
+
 #endif /* FEATURE_USB_CDC */

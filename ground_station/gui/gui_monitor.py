@@ -339,7 +339,14 @@ class RocketDashboardApp:
         self.lbl_role = tk.Label(top_bar, text="⚫ 未連線", bg="#151515", fg="#777777",
                                  font=("Helvetica", 12, "bold"))
         self.lbl_role.pack(side=tk.LEFT, padx=16, pady=5)
-        
+
+        # 主/備板間鏈路溝通狀態徽章（解析 [LINK] 行，見 update_link_status）。
+        # 僅主/備航電會印 [LINK]（FEATURE_LINK，地面站不參與），未連線/未收到過該行時顯示灰色。
+        self.lbl_link = tk.Label(top_bar, text="🔗 --", bg="#151515", fg="#555555",
+                                 font=("Helvetica", 11, "bold"))
+        self.lbl_link.pack(side=tk.LEFT, padx=4, pady=5)
+        self.link_last_age_ms = None
+
         # 連接控制區
         conn_frame = tk.Frame(top_bar, bg="#151515")
         conn_frame.pack(side=tk.RIGHT, pady=5)
@@ -466,6 +473,7 @@ class RocketDashboardApp:
         self.console.tag_config("err", foreground="#dc3545", background="#2a0000")
         self.console.tag_config("tele", foreground="#aaaaaa")
         self.console.tag_config("lora", foreground="#e07bfb")
+        self.console.tag_config("link", foreground="#00e676")
 
         left_pane.add(left_frame, height=400, minsize=180)
 
@@ -941,7 +949,12 @@ class RocketDashboardApp:
             except Exception as e:
                 messagebox.showerror("串口連線失敗", f"無法開啟 {port}，請檢查硬體接線！\n錯誤: {e}")
                 return
-            
+
+            # 記住這次連的 port/baud，供斷線自動重連使用（板子重置＝USB-CDC 整個消失
+            # 再重新列舉，見 serial_read_task 例外處理）。
+            self.connect_port = port
+            self.connect_baud = baud
+
             # 打開記錄檔
             if self.save_log_var.get():
                 now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -997,11 +1010,11 @@ class RocketDashboardApp:
                     line = raw.decode('utf-8', errors='ignore').strip()
                     if not line:
                         continue
-                    
+
                     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     # 放入佇列傳送至主執行緒
                     self.data_queue.put((ts, line))
-                    
+
                     # 同步寫入日誌
                     if self.log_file:
                         self.log_file.write(f"[{ts}] {line}\n")
@@ -1009,18 +1022,51 @@ class RocketDashboardApp:
                 else:
                     time.sleep(0.002) # 減少 CPU 飆升
             except Exception as e:
-                # 串口異常中斷
-                if self.running:
-                    self.data_queue.put(("ERR", f"[SYSTEM] ⚠️ 串口通訊中斷，連線關閉: {e}"))
-                    self.running = False
-                break
-                
+                if not self.running:
+                    break
+                # 串口中斷不視為致命錯誤直接停止監控：MCU 重置時 USB-CDC 會整個消失、
+                # 重新列舉成新裝置，若在此停手要求使用者自己按「連接」，等使用者反應過來
+                # 開機/角色判斷等最早期的 log 早已錯過（USB best-effort、PC 沒接就丟，
+                # 韌體端也不落地）。故改為原地快速輪詢重開同一個 port，搶開機最早窗口。
+                self.data_queue.put(("SYS", f"[SYSTEM] ⚠️ 串口中斷（{e}），偵測是否為板子重置並自動重連…"))
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self._serial_reconnect_loop()
+                # running 可能在等待期間被使用者按「中斷連線」清掉，迴圈條件會自然跳出
+
         # 清除連線狀態
         try:
             if self.root.winfo_exists():
                 self.root.after(0, self.update_disconnect_ui)
         except tk.TclError:
             pass
+
+    def _serial_reconnect_loop(self):
+        """MCU 重置＝USB-CDC 整個消失再重新列舉；50ms 高頻輪詢重開同一個 port，
+        搶開機最早期窗口（愈快接上，愈不會錯過 [BOOT]/角色判斷等只印一次的訊息）。
+        直接呼叫 serial.Serial 而非 serial_link.open_serial：後者每次失敗都會 print，
+        高頻輪詢會洗版終端機。"""
+        t0 = time.monotonic()
+        warned = False
+        while self.running:
+            try:
+                ser = serial.Serial(self.connect_port, self.connect_baud, timeout=0.5)
+                try:
+                    ser.dtr = False
+                    ser.rts = False
+                except Exception:
+                    pass
+                ser.reset_input_buffer()
+                self.ser = ser
+                self.data_queue.put(("SYS", f"[SYSTEM] 🟢 已自動重新連接 {self.connect_port}"))
+                return
+            except Exception:
+                if not warned and (time.monotonic() - t0) > 5.0:
+                    self.data_queue.put(("SYS", f"[SYSTEM] ⏳ 仍在嘗試自動重連 {self.connect_port}…"))
+                    warned = True
+                time.sleep(0.05)
 
     def update_disconnect_ui(self):
         try:
@@ -1047,10 +1093,18 @@ class RocketDashboardApp:
                 self.console.insert(tk.END, f"{line}\n", "err")
                 self.console.see(tk.END)
                 continue
-                
+
+            if ts == "SYS":
+                # 斷線/自動重連提示（不是錯誤，見 serial_read_task/_serial_reconnect_loop）
+                self.console.insert(tk.END, f"{line}\n", "ok")
+                self.console.see(tk.END)
+                continue
+
             # 輸出滾動字元日誌，高亮重要字眼
             tag = "tele"
-            if "[RATE]" in line:
+            if "[LINK]" in line:
+                tag = "link"
+            elif "[RATE]" in line:
                 tag = "rate"
             elif "[MAG]" in line:
                 tag = "mag"
@@ -1189,7 +1243,16 @@ class RocketDashboardApp:
             m_pkt = re.search(r"PKT_TOTAL:(\d+)", line)
             if m_pkt:
                 self.cards["flash_pkt"].config(text=f"{m_pkt.group(1)} Pkts")
-                
+
+        # C2. 主/備板間鏈路溝通狀態 [LINK] self:.. peer:.. link:OK/STALE/NONE state:.. flags:.. age:..ms
+        elif "[LINK]" in line:
+            m = re.search(
+                r"self=(\w+)\s+peer=(\w+)\s+link=(\w+)\s+state=(\w+)\s+flags=0x([0-9A-Fa-f]+)\s+age=(\d+)ms",
+                line)
+            if m:
+                self_role, peer_role, link_ok, peer_state, flags_hex, age_ms = m.groups()
+                self.update_link_status(self_role, peer_role, link_ok, peer_state, int(flags_hex, 16), int(age_ms))
+
         # D. 解析 FSM 狀態轉移以動態更新 HUD
         elif "[FSM]" in line:
             m_state = re.search(r"(STATE_[A-Z_]+)", line)
@@ -1625,9 +1688,30 @@ class RocketDashboardApp:
         if changed and role:
             self.console.insert(tk.END, f"[SYSTEM] ✅ 偵測到裝置角色: {text}\n", "ok")
             self.console.see(tk.END)
+        if role is None:
+            self.lbl_link.config(text="🔗 --", fg="#555555")
+            self.link_last_age_ms = None
         # 同步 LoRa 面板（若已開啟）
         if hasattr(self, 'lora_win') and self.lora_win and self.lora_win.winfo_exists():
             self.refresh_lora_panel_role()
+
+    _LINK_PEER_LABEL = {"PRIMARY": "主航電", "BACKUP": "備航電", "NONE": "無"}
+
+    def update_link_status(self, self_role, peer_role, link_ok, peer_state, flags, age_ms):
+        """更新頂部鏈路徽章：本板↔對端的溝通狀態（來自 [LINK] 診斷行，1Hz）。
+        link_ok: OK=收得到且新鮮 / STALE=曾收過但逾時 / NONE=從未收過對端封包。"""
+        self.link_last_age_ms = age_ms
+        peer_label = self._LINK_PEER_LABEL.get(peer_role, peer_role)
+        if link_ok == "OK":
+            text = f"🔗 {peer_label} OK ({peer_state}, {age_ms}ms)"
+            color = "#00e676"
+        elif link_ok == "STALE":
+            text = f"🔗 {peer_label} 失聯 ({age_ms}ms)"
+            color = "#ffcc00"
+        else:
+            text = f"🔗 {peer_label}（尚無回應）"
+            color = "#ff3366"
+        self.lbl_link.config(text=text, fg=color)
 
     def query_role(self):
         """主動送 'role' 命令查詢角色（三種角色 firmware 都會回 [ROLE_ID]）。

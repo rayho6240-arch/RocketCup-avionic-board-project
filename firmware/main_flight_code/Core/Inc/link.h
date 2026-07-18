@@ -26,7 +26,6 @@ typedef struct {
     uint8_t  board_id;       /* 對端 board_id */
     uint8_t  fsm_state;      /* 對端最近回報的 FSM 狀態 */
     uint8_t  flags;          /* 對端最近一筆 flags */
-    uint8_t  peer_ack_state; /* 對端 echo 回的「它已採用的『我方』FSM 狀態」＝對端對我的 ACK */
     uint32_t peer_tick_ms;   /* 對端封包內的飛行 tick */
     uint32_t last_rx_ms;     /* 本機收到該封包時的 tick（freshness 基準） */
     uint8_t  drogue_latched; /* 對端曾通報 DROGUE_FIRED（鎖存，不清除） */
@@ -37,14 +36,6 @@ void    LinkPeer_Init(LinkPeer_t *p);
 void    LinkPeer_OnPacket(LinkPeer_t *p, const LinkPacket_t *pkt, uint32_t now_ms);
 /* 對端是否仍在線（valid 且距上次收包 < timeout_ms） */
 uint8_t LinkPeer_Fresh(const LinkPeer_t *p, uint32_t now_ms, uint32_t timeout_ms);
-
-/**
- * @brief 對端是否已確認跟進到「我方」的當前狀態（雙向心跳 echo＝ACK）。
- * @param my_state 本板當前 FSM 狀態
- * @return 1 = 對端最近封包 echo 回的 ack_state 等於 my_state（已同步）；否則 0。
- * @note  純比較，不看 freshness——呼叫端若需「新鮮且已同步」自行併 LinkPeer_Fresh()。
- */
-uint8_t LinkPeer_Synced(const LinkPeer_t *p, uint8_t my_state);
 
 /* === 備板開傘閘（drogue 與 main 各持一份狀態） === */
 typedef struct {

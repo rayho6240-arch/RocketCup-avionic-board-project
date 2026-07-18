@@ -95,23 +95,32 @@
 /* 飛控管線（IMU/baro/highG → EKF → FSM → 點火/傘控）：主 + 備皆跑，地面站關閉省資源。 */
 #define FEATURE_FLIGHT (!IS_GROUND)
 
-/* USB 虛擬序列埠（CDC）：僅地面站啟用，串流接收到的遙測 + 自身 GPS 給 PC。
- * 飛行版不啟用（MX_USB_DEVICE_Init 被守住）→ 不列舉、不進 USB 中斷、不佔 CPU。 */
-#define FEATURE_USB_CDC IS_GROUND
+/* 除錯用 USB-CDC printf 直通（台面測試開關，預設關閉）：
+ * 設 1 → 不論角色，一律初始化 USB_DEVICE 並讓 printf 改走 USB 虛擬序列埠（見 main.c
+ * _write），免接 SWD 除錯器、免佔用被板間鏈路用掉的 USART2，插 USB 線用序列埠工具
+ * 即可看 log。best-effort（PC 未讀取即丟棄），不阻塞飛控路徑。
+ * ★飛行前務必改回 0——純台面除錯用，不是飛行設計的一部分（會多出 USB 列舉與常駐
+ * CPU 佔用，見下方 FEATURE_USB_CDC 註解）。 */
+#ifndef FEATURE_USB_DEBUG_LOG
+#define FEATURE_USB_DEBUG_LOG 0
+#endif
 
-/* 板間鏈路：主備皆需，地面站不參與（非配對飛控板）。設 0 可回復「USART2 = printf/ESP32
- * 除錯橋」的開發建置（啟用後 USART2 改跑二進制鏈路，printf 改走 SWO/ITM，見 main.c _write）。 */
+/* USB 虛擬序列埠（CDC）：地面站固定啟用，串流接收到的遙測 + 自身 GPS 給 PC；
+ * 其餘角色僅在上方 FEATURE_USB_DEBUG_LOG 開啟時（台面除錯）才啟用。
+ * 飛行版預設不啟用（MX_USB_DEVICE_Init 被守住）→ 不列舉、不進 USB 中斷、不佔 CPU。 */
+#define FEATURE_USB_CDC (IS_GROUND || FEATURE_USB_DEBUG_LOG)
+
+/* 板間鏈路：主備皆需，地面站不參與（非配對飛控板）。啟用後 USART2 改跑二進制鏈路，
+ * printf 改走 SWO/ITM 或 USB-CDC（見 FEATURE_USB_DEBUG_LOG / main.c _write 的優先序）。
+ * 設 0 可回復「USART2 = printf 除錯橋」的單板開發建置（make monitor 可見，@460800）。 */
 #ifndef FEATURE_LINK
-/* 單板除錯時設 0：printf 回到 USART2 @460800，make monitor 可見。
- * 雙板飛行版改回 (!IS_GROUND)。 */
-#define FEATURE_LINK   0
+#define FEATURE_LINK   (!IS_GROUND)   /* 雙板飛行版：主/備皆跑；地面站不參與 */
 #endif
 
 /* === 板間鏈路參數（USART2 硬體全雙工） === */
 #define LINK_BAUD             38400U /* 主備兩板 USART2 同此值；短排線餘裕充足 */
 #define LINK_TX_PERIOD_MS     50U    /* 自身狀態廣播週期（20 Hz；飛控 100 Hz 每 5 次送一次） */
 #define LINK_PEER_TIMEOUT_MS  300U   /* 超過此值無有效封包 → 對端視為失聯（備板轉全自主） */
-#define LINK_SYNC_TIMEOUT_MS  300U   /* 主板換態後逾此值仍未收到副板 echo(ack_state) → 標記 LINK_DESYNC */
 
 /* === 備援航電開傘偏壓（不對稱：主決策、備補位） ===
  * 備板獨立跑自己的 FSM；判到開傘條件後不立即輸出，先等 BACKUP_GRACE_MS 觀察主板是否
@@ -136,25 +145,29 @@
   #undef  FEATURE_LORA_RX
   #undef  FEATURE_UPLINK_DEPLOY
   #undef  FEATURE_FLIGHT
+  #undef  FEATURE_USB_DEBUG_LOG
   #undef  FEATURE_USB_CDC
   #undef  FEATURE_FLASH
   #undef  FEATURE_VFILTER
   #undef  FEATURE_VFILTER_FSM
   #undef  FEATURE_BUZZER
   #undef  FEATURE_PYRO_SELFTEST
+  #undef  FEATURE_LINK
   #define FEATURE_MAG           0
   #define FEATURE_LORA          0   /* E22 433 + E80 920 完全不 init、不發射 */
   #define FEATURE_LORA_TX       0
   #define FEATURE_LORA_RX       0
   #define FEATURE_UPLINK_DEPLOY 0
   #define FEATURE_FLIGHT        0   /* 關整條 IMU/baro/highG→EKF→FSM 管線 */
+  #define FEATURE_USB_DEBUG_LOG 0
   #define FEATURE_USB_CDC       0
   #define FEATURE_FLASH         0   /* 停 W25Q128 記錄，降低 SPI3 活動 */
   #define FEATURE_VFILTER       0
   #define FEATURE_VFILTER_FSM   0
   #define FEATURE_BUZZER        0
   #define FEATURE_PYRO_SELFTEST 0
-  /* FEATURE_GPS 保持開啟；FEATURE_LINK 維持 0 → printf 走 USART2@460800 可監看 [GPS_RAW] */
+  #define FEATURE_LINK          0   /* 板間鏈路本身也是匯流排活動，一併靜音 */
+  /* FEATURE_GPS 保持開啟；FEATURE_LINK 強制 0 → printf 走 USART2@460800 可監看 [GPS_RAW] */
 #endif
 
 #endif /* BOARD_CONFIG_H */

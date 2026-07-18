@@ -44,6 +44,7 @@
 #include "gs_lora_test.h"   /* 地面站 LoRa 通訊測試模組（UART2 命令 + 雙鏈路統計） */
 #include "uplink_cmd.h"     /* 上行手動開傘（FEATURE_UPLINK_DEPLOY 下編入；其餘為空） */
 #include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
+#include "usbd_cdc_if.h"    /* CDC_Transmit_FS（FEATURE_USB_DEBUG_LOG 下 printf 直通 USB 用） */
 #include "vertical_filter.h" /* 垂直通道 3 狀態 Kalman（FEATURE_VFILTER 下於 FSM_Update 接線） */
 /* 版本資訊：版號為 board_config.h 的 FIRMWARE_VERSION（手動語意化版本）。
  * Makefile 建置前自動產生 build_version.h，補上 git 版次(FW_GIT) 與建置時間(FW_BUILD)；
@@ -244,6 +245,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_TIM4_Init(void);
+static void Servo_HoldLow(void);   /* 主傘舵機 PD14 開機拉低（無 PWM 訊號），部署時才輸出 */
 static void MX_ADC1_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_RTC_Init(void);
@@ -326,6 +328,9 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  /* 主傘舵機 PD14 立即拉低：MX_TIM4_Init 的 MspPostInit 已把 PD14 設為 TIM4 AF，此處覆蓋為
+   * GPIO 輸出並拉低，確保開機到部署前腳位「完全無訊號」（部署時 Servo_DeployMain 才切回 AF）。 */
+  Servo_HoldLow();
   setvbuf(stdout, NULL, _IONBF, 0);   /* 關閉 stdout 緩衝，使所有 FreeRTOS 任務的 printf 立即送往 UART，防慢速任務因獨立 reent 結構積壓不印 */
   HAL_Delay(500);   /* 延遲 500ms 讓 USB-TTL 串口驅動在 MCU 重置後有時間穩定，防止 PC 端漏字 */
   /* 開機橫幅：版本 + 角色，重複三次（剛接上序列埠/雜訊環境也至少看得到一次）。 */
@@ -1705,7 +1710,48 @@ static void MX_GPIO_Init(void)
 int _write(int file, char *ptr, int len)
 {
   (void)file;
-#if FEATURE_LINK
+#if FEATURE_USB_DEBUG_LOG
+  /* 台面除錯開關（board_config.h）：printf 改走 USB-CDC 虛擬序列埠，免接 SWD 除錯器、
+   * 免佔用被板間鏈路用掉的 USART2。飛行前務必把 FEATURE_USB_DEBUG_LOG 改回 0。
+   *
+   * 串行化：與 UART 分支共用 g_uart_printf_mutex。缺此鎖時多任務會同時呼叫 CDC_Transmit_FS
+   * 覆寫同一顆 TX 緩衝，輸出交錯、字元層級毀損。
+   * 非同步安全：CDC 傳輸經 IN 端點中斷背景完成，傳輸期間讀取的是我們給的緩衝，故
+   *   (1) 先等前一筆傳完（CDC_TxBusy 清）才可覆寫共用靜態緩衝；
+   *   (2) 複製 ptr 到靜態緩衝再送，避免 newlib 於傳輸中覆寫呼叫端 ptr。
+   * best-effort：PC 未讀取（TxState 卡住）時逾 5ms 放棄該段，不阻塞飛控路徑。
+   * RTOS 未啟動前（USB 尚未列舉、osDelay 不可用）直接略過。 */
+  /* 行組裝：stdout 無緩衝 → 一次 printf 拆成多次 _write 片段。若逐片段送 USB，USB-FS 每
+   * ~1ms 只能推一個 64B 封包，片段撞 TxBusy 被丟 → 半行掉字。改為在此累積到換行才整行送出：
+   *   送 → 送整行；丟 → 丟整行（PC 未讀時），輸出乾淨可讀。
+   * 完全不阻塞（絕不 osDelay/忙等）：本函式亦由「餵看門狗」的 StartDefaultTask 呼叫，任何忙等
+   * 都會在 PC 未讀（TxState 卡住）時逐行累積延遲 → 撐爆 IWDG(2.05s) → MCU 重置（先前症狀）。
+   * s_usb_line 累積中的行、s_usb_tx 送出用（CDC 非同步傳輸期間讀取的是它，須與累積緩衝分開，
+   * 且僅在 !TxBusy＝前一筆已送完時覆寫）。g_uart_printf_mutex 串行化多任務對這組共用緩衝的存取。 */
+  #define USB_LOG_LINE_MAX 256U
+  static uint8_t  s_usb_line[USB_LOG_LINE_MAX];
+  static uint16_t s_usb_line_len = 0;
+  static uint8_t  s_usb_tx[USB_LOG_LINE_MAX];
+  if (g_uart_printf_mutex != NULL &&
+      osKernelGetState() == osKernelRunning &&
+      __get_IPSR() == 0U) {
+    osMutexAcquire(g_uart_printf_mutex, osWaitForever);
+    for (int i = 0; i < len; i++) {
+      uint8_t c = (uint8_t)ptr[i];
+      if (s_usb_line_len < USB_LOG_LINE_MAX) {
+        s_usb_line[s_usb_line_len++] = c;
+      }
+      if (c == (uint8_t)'\n' || s_usb_line_len >= USB_LOG_LINE_MAX) {
+        if (!CDC_TxBusy()) {                       /* 前一筆已送完才送（否則丟整行，不等待） */
+          memcpy(s_usb_tx, s_usb_line, s_usb_line_len);
+          CDC_Transmit_FS(s_usb_tx, s_usb_line_len);
+        }
+        s_usb_line_len = 0;                        /* 送出或丟棄後都清空，開始下一行 */
+      }
+    }
+    osMutexRelease(g_uart_printf_mutex);
+  }
+#elif FEATURE_LINK
   /* USART2 已作板間鏈路；printf 改走 SWO/ITM（需 SWD/SWV 觀看；無除錯器時 ITM_SendChar
    * 自動略過、不阻塞）。如需回復 USART2 文字除錯橋，建置時設 -DFEATURE_LINK=0。 */
   for (int i = 0; i < len; i++) {
@@ -1726,17 +1772,42 @@ int _write(int file, char *ptr, int len)
   return len;
 }
 
+/* === 主傘舵機 PD14/TIM4_CH3：開傘前硬體拉低、無任何訊號；部署瞬間才切 AF 輸出 PWM ===
+ * 安全需求：MspPostInit 開機把 PD14 設為 TIM4 AF，PWM 未 start 時腳位狀態不保證為低。
+ * 故開機以 Servo_HoldLow() 覆蓋為 GPIO 輸出並拉低（TIM4 CH3 不 start）；部署時 Servo_DeployMain()
+ * 才切回 AF、啟動 PWM 並轉到 180°。1MHz tick → 脈寬 µs 值；50Hz 幀（TIM4 Period=19999）。 */
+#define SERVO_DEPLOY_US   2500U   /* 180°（同 pyro_selftest.h 的 PYRO_SELFTEST_SERVO_180DEG_US） */
+
+static void Servo_HoldLow(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin   = PWM_Servo_Pin;
+    gi.Mode  = GPIO_MODE_OUTPUT_PP;
+    gi.Pull  = GPIO_NOPULL;
+    gi.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);
+    HAL_GPIO_WritePin(PWM_Servo_GPIO_Port, PWM_Servo_Pin, GPIO_PIN_RESET);   /* 硬體低、無訊號 */
+}
+
+static void Servo_DeployMain(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin       = PWM_Servo_Pin;
+    gi.Mode      = GPIO_MODE_AF_PP;
+    gi.Pull      = GPIO_NOPULL;
+    gi.Speed     = GPIO_SPEED_FREQ_LOW;
+    gi.Alternate = GPIO_AF2_TIM4;
+    HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);                                  /* 切回 TIM4 AF */
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, SERVO_DEPLOY_US);            /* 先定 180° 脈寬 */
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);                                 /* 再啟 PWM 輸出 */
+}
+
 /* === FSM 包裝層（P0-A）：純邏輯已抽離至 fsm.c/h，由 tests/test_fsm.c 驗證 ===
  * 此處職責：組輸入快照 → FSM_Step() → 執行硬體動作 → 鏡射全域 → 事件列印。
  * 硬體動作（點火/舵機/蜂鳴器）嚴格先於 printf：避免 UART 阻塞（~9ms/行）延遲開傘。 */
 static FSM_Context_t g_fsm_ctx;
 volatile uint8_t g_fsm_failsafe_fired = 0;   /* 失效保護點火鎖存（telemetry TELEM_FLAG_FAILSAFE 讀取） */
 volatile uint8_t g_hotstart_restored  = 0;   /* P0-F：熱啟動恢復鎖存（telemetry TELEM_FLAG_HOTSTART） */
-
-/* 板間鏈路健康標記（FSM_Update 每拍更新；記錄至 Flash ring sys_flags 0x04/0x08 供事後判讀） */
-#define LINK_STATUS_LOST    0x01U   /* 對端逾 LINK_PEER_TIMEOUT_MS 無心跳 */
-#define LINK_STATUS_DESYNC  0x02U   /* 主板換態後逾 LINK_SYNC_TIMEOUT_MS 副板仍未 echo 跟進 */
-volatile uint8_t g_link_status = 0;
 
 static void FSM_Update(void)
 {
@@ -1855,58 +1926,22 @@ static void FSM_Update(void)
 #endif
 #endif /* FEATURE_VFILTER */
 
-    /* === 副航電：baro-only 強制 + 對端命令/狀態跟隨（置於 VFILTER_FSM 之後，覆蓋其對
-     * in.ekf_healthy 的重寫）=================================================
-     * 副板恆只靠氣壓計判斷高度/速度 → FSM 走純 baro 降級鏈（apogee=baro trend、
-     * 主觸發=baro_alt_rel）。peer_main_cmd = 主板廣播 MAIN_DEPLOYED(開 servo)＝命令點火。
-     * 狀態跟隨：主板每次換態經心跳持續重廣，副板 forward-only 前推（上限 DESCENT）。
-     * 失聯（peer 不新鮮）→ 忽略跟隨與命令，純 baro 自主。 */
-    in.peer_main_cmd = 0U;
-#if IS_BACKUP
-    in.ekf_healthy   = 0U;   /* 副航電永遠 baro-only（不吃 EKF/VF） */
-#endif
-#if (IS_BACKUP && FEATURE_LINK)
-    if (Link_PeerFresh(now)) {
-        const LinkPeer_t *peer = Link_GetPeer();
-        in.peer_main_cmd = peer->main_latched ? 1U : 0U;   /* 主板開 servo → 命令副板點火 */
-        FSM_FollowPeerState(&g_fsm_ctx, peer->fsm_state, now);
-    }
-#endif
-
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
-    /* --- 1. 硬體動作（先於任何列印） --- */
-#if IS_BACKUP
-    /* 備援航電（非對稱功能分工）：唯一實體職責＝在 300m 用點火頭（PD13/FIRE_Pin）炸開主傘。
-     * 自身 FSM 照常推進（純 baro）＋跟隨主板態；act.deploy_main（自身 baro≤300m 或主板
-     * 命令 peer_main_cmd，且過 arm 互鎖，見 fsm.c STATE_DESCENT）→ FIRE_Pin 拉高一個
-     * FSM_IGNITER_PULSE_MS 脈衝後放開（e-match 毫秒級引爆，脈衝後放開保護 MOSFET/電池）。
-     * 不驅動副傘 DC 馬達、不驅動 servo。release_drogue 無對應機構故忽略；buzzer 照常。 */
-    {
-        static uint8_t  s_ign_active = 0U;
-        static uint32_t s_ign_tick   = 0U;
-        if (act.deploy_main) {
-            HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);    // 主傘點火頭導通
-            s_ign_active = 1U;
-            s_ign_tick   = now;
-        }
-        if (s_ign_active && (now - s_ign_tick) >= FSM_IGNITER_PULSE_MS) {
-            HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);  // 脈衝結束：放開
-            s_ign_active = 0U;
-        }
-    }
-#else
+    /* --- 1. 硬體動作（先於任何列印） ---
+     * 對稱獨立：主/副兩板跑同一份 FSM、同一組輸出，各自依自身感測器獨立開傘。
+     * 副傘 DC 馬達＝PD13（簡單 GPIO，導通 FSM_DROGUE_MOTOR_RUN_MS）；主傘舵機＝PD14/
+     * TIM4_CH3，平時硬體拉低、無任何訊號（見 Servo_HoldLow），部署瞬間才切 AF 輸出
+     * PWM 到 180°（Servo_DeployMain）。 */
     if (act.fire_drogue) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 啟動副傘 DC 馬達
+        HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);    // 啟動副傘 DC 馬達（PD13）
     }
     if (act.release_drogue) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 馬達限時導通保護：斷開
+        HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);  // 馬達限時導通保護：斷開
     }
     if (act.deploy_main) {
-        HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
+        Servo_DeployMain();   // PD14 切 AF + 啟 PWM + CCR=SERVO_DEPLOY_US(180°)
     }
-#endif
 
 #if FEATURE_UPLINK_DEPLOY
     /* 上行手動開傘（地面站 433 命令，uplink_cmd 已經 ARM→DEPLOY 兩段式驗證）。
@@ -1924,8 +1959,7 @@ static void FSM_Update(void)
                 s_man_drogue_tick   = now;
             }
             if (man_main) {
-                HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
-                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);          // 手動主傘舵機釋放角度
+                Servo_DeployMain();   // 手動主傘：PD14 切 AF + 啟 PWM + 轉 180°（同自動部署）
             }
         }
         /* 手動副傘導通限時保護：FSM_DROGUE_MOTOR_RUN_MS 後斷開馬達（同 FSM 自身馬達限時）。 */
@@ -1955,30 +1989,6 @@ static void FSM_Update(void)
     /* P0-E：飛行態（BOOST..MAIN_DEPLOY）禁止 Flash 同步滾動擦除（~400ms 阻塞） */
     FlashRing_SetEraseAllowed((g_fsm_ctx.state >= STATE_BOOST &&
                                g_fsm_ctx.state <= STATE_MAIN_DEPLOY) ? 0U : 1U);
-
-#if FEATURE_LINK
-    /* 板間鏈路健康標記（供 Flash 記錄/事後判讀，見 ring sys_flags 0x04/0x08）：
-     *   LOST   = 對端逾 LINK_PEER_TIMEOUT_MS 無有效心跳（副板轉全自主、純 baro）。
-     *   DESYNC = 主板換態後逾 LINK_SYNC_TIMEOUT_MS 仍未收到副板 echo(ack_state)＝已跟進本板態。 */
-    {
-        static uint8_t  s_link_last_state = 0xFFU;
-        static uint32_t s_link_state_tick = 0U;
-        if ((uint8_t)current_fsm_state != s_link_last_state) {
-            s_link_last_state = (uint8_t)current_fsm_state;
-            s_link_state_tick = now;
-        }
-        const LinkPeer_t *lp = Link_GetPeer();
-        uint8_t lst = 0U;
-        if (!Link_PeerFresh(now)) {
-            lst |= LINK_STATUS_LOST;
-        } else if (IS_PRIMARY &&
-                   !LinkPeer_Synced(lp, (uint8_t)current_fsm_state) &&
-                   (now - s_link_state_tick) >= LINK_SYNC_TIMEOUT_MS) {
-            lst |= LINK_STATUS_DESYNC;
-        }
-        g_link_status = lst;
-    }
-#endif
 
     /* --- 3. 事件列印（訊息逐字保留自原 FSM_Update） --- */
     switch ((FSM_Event_t)act.event) {
@@ -2042,6 +2052,16 @@ static void FSM_Update(void)
 }
 
 #if FEATURE_LINK
+/* 對端 fsm_state（FlightState_t 數值）→ 簡短字串，供 [LINK] 診斷行輸出（GUI 監控用）。 */
+static const char *link_fsm_state_name(uint8_t s)
+{
+    static const char *const names[] = {
+        "INIT", "PAD", "BOOST", "COAST", "DEP_DROGUE",
+        "APOGEE", "DESCENT", "MAIN_DEPLOY", "LANDED"
+    };
+    return (s < (sizeof(names) / sizeof(names[0]))) ? names[s] : "UNK";
+}
+
 /* === 板間鏈路：自身狀態組裝 + 週期廣播 === */
 static void Link_BuildOwnStatus(LinkStatus_t *ls)
 {
@@ -2049,9 +2069,6 @@ static void Link_BuildOwnStatus(LinkStatus_t *ls)
     ls->board_id  = IS_BACKUP ? LINK_BOARD_BACKUP : LINK_BOARD_PRIMARY;
     ls->seq       = 0U;   /* 由 Link_SendStatus 補遞增序號 */
     ls->fsm_state = (uint8_t)current_fsm_state;
-    /* echo-back：本板已採用的「對端」FSM 狀態＝對對端的 ACK（雙向狀態跟隨確認）。
-     * 主板據此判 LinkPeer_Synced(自身 state)＝副板已跟進；副板則回報已採用的主板狀態。 */
-    ls->ack_state = Link_GetPeer()->fsm_state;
 
     /* flags 與下行遙測同語意（TELEM_FLAG_*）；備板據主板 DROGUE_FIRED/MAIN_DEPLOYED 抑制 */
     uint8_t flags = 0U;
@@ -2282,6 +2299,25 @@ void StartDiagnosticTask(void *argument)
                  (int)GPS_IsStale(2000),
                  (unsigned long)g->sentences_ok,
                  (unsigned long)g->sentences_err);
+
+#if FEATURE_LINK
+          /* 2. 板間鏈路溝通狀態（1Hz）：自身角色/對端角色/鏈路是否新鮮/對端最近回報的
+           * FSM 狀態與旗標/距上次收包時間。GUI 監控（USB）據此顯示主備兩板的溝通狀態；
+           * 對稱獨立冗餘設計下鏈路不再仲裁點火（各板獨立判斷），純供人工監看/事後判讀。 */
+          {
+              uint32_t now_link = HAL_GetTick();
+              const LinkPeer_t *peer = Link_GetPeer();
+              uint8_t fresh = Link_PeerFresh(now_link);
+              const char *link_state = !peer->valid ? "NONE" : (fresh ? "OK" : "STALE");
+              printf("[LINK] self=%s peer=%s link=%s state=%s flags=0x%02X age=%lums\r\n",
+                     IS_BACKUP ? "BACKUP" : "PRIMARY",
+                     !peer->valid ? "NONE" : ((peer->board_id == LINK_BOARD_BACKUP) ? "BACKUP" : "PRIMARY"),
+                     link_state,
+                     link_fsm_state_name(peer->fsm_state),
+                     peer->flags,
+                     (unsigned long)(peer->valid ? (now_link - peer->last_rx_ms) : 0U));
+          }
+#endif
 
 #ifdef RATE_MONITOR_ENABLE
           // 3. 採樣率遙測
@@ -3178,12 +3214,8 @@ void StartDefaultTask(void *argument)
         
         // 抓取系統開傘狀態旗標
         uint8_t sys_flags = 0;
-        if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_13) == GPIO_PIN_SET) sys_flags |= 0x01; // 副傘已點火（副板：300m 點火頭導通）
+        if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_13) == GPIO_PIN_SET) sys_flags |= 0x01; // 副傘已點火
         if (__HAL_TIM_GET_COMPARE(&htim4, TIM_CHANNEL_3) >= 2000) sys_flags |= 0x02; // 主傘已釋放
-#if FEATURE_LINK
-        if (g_link_status & LINK_STATUS_LOST)   sys_flags |= 0x04; // 板間鏈路失聯
-        if (g_link_status & LINK_STATUS_DESYNC) sys_flags |= 0x08; // 副板未跟進主板狀態
-#endif
         ring_pkt.flags       = sys_flags;
         
         ring_pkt.bat_voltage_mv = g_bat_voltage_mv;   /* P0-E：改用 1Hz 快取（ADC 讀取移出 50Hz 寫入路徑） */

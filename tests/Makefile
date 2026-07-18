@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../firmware/main_flight_code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm test_fsm_elevator test_fsm_backup test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto test_vertical_filter
+BINS := test_sensor_axis test_fsm test_fsm_elevator test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto test_vertical_filter
 
 .PHONY: run clean
 
@@ -31,11 +31,6 @@ test_fsm: test_fsm.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/mai
 # 驗證與飛行 profile 共用同一份 fsm.c 邏輯在電梯剖面下的行為（見 test_fsm_elevator.c）。
 test_fsm_elevator: test_fsm_elevator.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/main_flight_code/Core/Inc/fsm.h ../firmware/main_flight_code/Core/Inc/board_config.h
 	$(CC) $(CFLAGS) -DFLIGHT_PROFILE_ELEVATOR=1 -o $@ test_fsm_elevator.c ../firmware/main_flight_code/Core/Src/fsm.c $(LDLIBS)
-
-# 副航電變體（BOARD_ROLE=ROLE_BACKUP=1）：驗證 fsm.c 的 #if IS_BACKUP 專屬邏輯
-# （300m baro 門檻 + arm 互鎖 + peer_main_cmd 命令路徑）。飛行 profile（非電梯）。
-test_fsm_backup: test_fsm_backup.c ../firmware/main_flight_code/Core/Src/fsm.c ../firmware/main_flight_code/Core/Inc/fsm.h ../firmware/main_flight_code/Core/Inc/board_config.h
-	$(CC) $(CFLAGS) -DBOARD_ROLE=1 -DFLIGHT_PROFILE_ELEVATOR=0 -o $@ test_fsm_backup.c ../firmware/main_flight_code/Core/Src/fsm.c $(LDLIBS)
 
 test_ekf_guard: test_ekf_guard.c ../firmware/main_flight_code/Core/Inc/ekf_guard.h
 	$(CC) $(CFLAGS) -o $@ test_ekf_guard.c $(LDLIBS)

@@ -471,38 +471,6 @@ static void test_hotstart_decide(void) {
 }
 
 /* ---------------------------------------------------------------- */
-static void test_follow_peer_state(void) {
-    printf("[9] FSM_FollowPeerState（副板狀態跟隨：forward-only、上限 DESCENT、pad 防護）\n");
-    FSM_Context_t ctx;
-
-    /* 9a. PAD（未起飛）：不論主板態多前都不前推（防 pad 收偽封包誤跟隨→低空誤點火） */
-    FSM_Init(&ctx, STATE_PAD, 1000, 0, 0);
-    FSM_FollowPeerState(&ctx, STATE_DESCENT, 2000);
-    check("PAD 不跟隨（state<BOOST 守門）", ctx.state == STATE_PAD);
-
-    /* 9b. BOOST → 主板 COAST：前推到 COAST，更新 state_entered */
-    FSM_Init(&ctx, STATE_BOOST, 1000, 500, 0);
-    FSM_FollowPeerState(&ctx, STATE_COAST, 2000);
-    check("BOOST 跟隨主板 COAST", ctx.state == STATE_COAST && ctx.state_entered_ms == 2000);
-
-    /* 9c. 主板 MAIN_DEPLOY：上限 DESCENT（300m 點火始終由副板自身 baro/命令決定，主板不能命令前推點火） */
-    FSM_Init(&ctx, STATE_COAST, 1000, 500, 0);
-    FSM_FollowPeerState(&ctx, STATE_MAIN_DEPLOY, 3000);
-    check("上限 DESCENT（主板 MAIN_DEPLOY 只推到 DESCENT）", ctx.state == STATE_DESCENT);
-
-    /* 9d. forward-only：主板態較落後不回退 */
-    FSM_Init(&ctx, STATE_DESCENT, 1000, 500, 0);
-    FSM_FollowPeerState(&ctx, STATE_BOOST, 3000);
-    check("forward-only：不回退", ctx.state == STATE_DESCENT);
-
-    /* 9e. 同態不前推（state_entered 不變） */
-    FSM_Init(&ctx, STATE_COAST, 1000, 500, 0);
-    ctx.state_entered_ms = 1234;
-    FSM_FollowPeerState(&ctx, STATE_COAST, 5000);
-    check("同態不前推（state_entered 不變）", ctx.state == STATE_COAST && ctx.state_entered_ms == 1234);
-}
-
-/* ---------------------------------------------------------------- */
 int main(void) {
     printf("=== test_fsm：飛行狀態機黃金剖面（P0-A 行為保存） ===\n");
     test_nominal_profile();
@@ -513,7 +481,6 @@ int main(void) {
     test_failsafe_and_baro_crosscheck();
     test_ekf_unhealthy_fallback();
     test_hotstart_decide();
-    test_follow_peer_state();
     printf("----------------------------------------\n");
     printf("%s：%d/%d 通過\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

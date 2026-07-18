@@ -66,10 +66,6 @@ typedef enum {
                                           // 驅動（非點火 MOSFET 瞬間脈衝），使用者確認
                                           // 8s 為機構完整展開所需時間（原 4000ms→8000ms；
                                           // main.c 手動副傘上行指令沿用同一常數，一併更新為 8s）
-
-#define FSM_IGNITER_PULSE_MS     1000U   // 副航電 300m 主傘點火頭 (PD13/FIRE_Pin) 導通脈寬 (ms)：
-                                          // e-match 毫秒級即引爆，脈衝後放開以保護 MOSFET/電池
-                                          // （副板專用；主板 PD13 為 DC 馬達走 FSM_DROGUE_MOTOR_RUN_MS）
 #define FSM_MAIN_INFLATE_MS      3000U   // 主傘充氣張開等待時間 (ms)
 #define FSM_TOUCHDOWN_V_MPS      0.3f    // 落地判定：|v_est| 門檻 (m/s)
 #define FSM_TOUCHDOWN_ALT_M      20.0f   // 落地判定：高度門檻 (m)
@@ -108,17 +104,6 @@ typedef enum {
 #define DROGUE_LEAD_TIME_S       4.0f     // 飛行副傘頂點提前開傘 (s)：DC 馬達機構需時展開
 
 #endif /* FLIGHT_PROFILE_ELEVATOR */
-
-/* === 副航電 baro-only 主傘觸發高度（角色分流） ===
- * 副板恆走純 baro 判定（main.c 於 VFILTER_FSM 之後強制 ekf_healthy=0），STATE_DESCENT 的
- * baro 分支應以「真正的主傘目標高度」為門檻，而非主板 EKF-失效降級用的保守固定值。
- *   IS_BACKUP  → TARGET_MAIN_ALTITUDE（副板 300m/電梯 10m 點火頭）
- *   否則(主板) → FSM_FB_MAIN_ALT_M（主板 EKF 失效降級沿用，200m/8m） */
-#if IS_BACKUP
-#define FSM_BARO_MAIN_DEPLOY_ALT_M  TARGET_MAIN_ALTITUDE
-#else
-#define FSM_BARO_MAIN_DEPLOY_ALT_M  FSM_FB_MAIN_ALT_M
-#endif
 
 #define FSM_BURNOUT_MIN_MS       1500U   // 馬達燒完：起飛後最短時間 (ms)（兩 profile 共用；電梯以此時間制燒完）
 
@@ -170,10 +155,8 @@ typedef struct {
     float    a_z_g;          // 高 G 垂直加速度 body-frame (g)
     float    baro_alt_rel;   // baro 原始高度 − pad 基準 (m)；P0-B 起使用
     uint8_t  ekf_calibrated; // EKF 靜態校準完成
-    uint8_t  ekf_healthy;    // EKF 健康（P0-C 起接 EKF_GetHealthBits()；副板恆 0＝純 baro）
+    uint8_t  ekf_healthy;    // EKF 健康（P0-C 起接 EKF_GetHealthBits()；目前恆 1）
     uint8_t  sensor_bits;    // 感測器故障位元（P0-D 起接 sensor_health；目前恆 0）
-    uint8_t  peer_main_cmd;  // 副板專用：對端(主板)命令點火（peer MAIN_DEPLOYED 鎖存）。
-                              // STATE_DESCENT 與自身 baro≤門檻 併為 OR；主板端恆 0。
 } FSM_Input_t;
 
 /* === 動作（呼叫端立即執行；硬體動作先於 printf） === */
@@ -238,19 +221,6 @@ void FSM_Init(FSM_Context_t *ctx, FlightState_t s0, uint32_t now_ms,
 
 /* 單步執行（100 Hz）。回傳本週期需執行的動作與事件。 */
 FSM_Action_t FSM_Step(FSM_Context_t *ctx, const FSM_Input_t *in);
-
-/**
- * @brief 副航電：跟隨主板廣播的 FSM 狀態（雙向心跳）。forward-only，上限 STATE_DESCENT。
- *        主板每次換態即由心跳持續重廣，副板據此把自身狀態前推（永不回退），確保即使副板
- *        自身 baro 頂點偵測偏弱，仍會可靠進入下降監看段。上限 DESCENT：300m 主傘點火始終由
- *        副板自身 baro（或主板 peer_main_cmd）在 STATE_DESCENT 決定，主板不能藉此直接命令點火。
- * @param ctx        本板 FSM 內部狀態
- * @param peer_state 對端（主板）最近回報的 FSM 狀態
- * @param now_ms     當前 tick（前推時更新 state_entered_ms）
- * @note  安全：僅在對端狀態 > 本板狀態 且 本板已離開 PAD（>= STATE_BOOST，自身已確認起飛）
- *        時才前推——防 pad 上收到偽封包把副板推進下降段。
- */
-void FSM_FollowPeerState(FSM_Context_t *ctx, uint8_t peer_state, uint32_t now_ms);
 
 #ifdef __cplusplus
 }

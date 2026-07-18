@@ -17,7 +17,6 @@ uint16_t LinkProto_Build(uint8_t *out, const LinkStatus_t *st)
     pkt.seq         = st->seq;
     pkt.fsm_state   = st->fsm_state;
     pkt.flags       = st->flags;
-    pkt.ack_state   = st->ack_state;
     pkt.tick_ms     = st->tick_ms;
     pkt.h_est_cm    = st->h_est_cm;
     pkt.v_est_cms   = st->v_est_cms;
