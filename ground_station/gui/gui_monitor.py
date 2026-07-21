@@ -474,6 +474,7 @@ class RocketDashboardApp:
         self.console.tag_config("tele", foreground="#aaaaaa")
         self.console.tag_config("lora", foreground="#e07bfb")
         self.console.tag_config("link", foreground="#00e676")
+        self.console.tag_config("ack", foreground="#00e5ff", background="#00303a")
 
         left_pane.add(left_frame, height=400, minsize=180)
 
@@ -1102,7 +1103,11 @@ class RocketDashboardApp:
 
             # 輸出滾動字元日誌，高亮重要字眼
             tag = "tele"
-            if "[LINK]" in line:
+            if "[ACK]" in line:
+                tag = "ack"
+            elif "[UPLINK]" in line:
+                tag = "lora"
+            elif "[LINK]" in line:
                 tag = "link"
             elif "[RATE]" in line:
                 tag = "rate"
@@ -1147,14 +1152,20 @@ class RocketDashboardApp:
 
     # ------------------ 指令/回應區（只收 CMD 與指令回應） ------------------
     # 白名單：使用者送出的 [CMD] + 韌體對「指令」的回應標籤。開機/角色/系統/遙測一律不進。
-    _EVENT_KEEP_TAGS = ("[CMD]", "[CAL]", "[E22]", "[E80]", "[LORA433]")
+    # [UPLINK]=地面站送上行命令的狀態；[ACK]=主航電對遠端指令的下行回覆。
+    _EVENT_KEEP_TAGS = ("[CMD]", "[CAL]", "[E22]", "[E80]", "[LORA433]", "[UPLINK]", "[ACK]")
 
     def _is_event_line(self, line):
         """只有使用者指令與其回應才進「指令/回應」區。"""
         return bool(line) and any(tag in line for tag in self._EVENT_KEEP_TAGS)
 
     def _event_tag(self, line):
-        if "[CMD]" in line:
+        if "[ACK]" in line:
+            # ACK 依 status 著色：非 OK（UNKNOWN/BADARG/UNARMED/REJECTED）視為警示
+            if "status:OK" in line:
+                return "resp"
+            return "err"
+        if "[CMD]" in line or "[UPLINK]" in line:
             return "cmd"
         if "ERROR" in line or "FAIL" in line or "❌" in line:
             return "err"

@@ -4,7 +4,7 @@
  */
 #include "pyro_selftest.h"
 
-#if FEATURE_PYRO_SELFTEST
+#if PYRO_SELFTEST_AVAILABLE
 
 #include <stdio.h>
 #include "main.h"        /* FIRE(PD13) / PWM_Servo(PD14) / LED_SYS(PE2) / LED_STAT2(PE4) 腳位 */
@@ -52,7 +52,7 @@ static void buzzer_beep(uint32_t ms)
     htim2.Instance->CCR1 = 0U;
 }
 
-void PyroSelfTest_RunOnce(void)
+void PyroSelfTest_RunSequence(void)
 {
     printf("\r\n============================================================\r\n");
     printf("[PYRO-SELFTEST] 開傘電火自測（主/副同序列，每次重啟跑一次）\r\n");
@@ -128,9 +128,19 @@ void PyroSelfTest_RunOnce(void)
     HAL_TIM_PWM_Stop(&htim4, TIM_CHANNEL_3);           /* 停 PWM */
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_OFF);
 
-    printf("[PYRO-SELFTEST] 完成。停在此處（SYS 續閃，不進飛控）——電源重置可再測一次。\r\n");
+    printf("[PYRO-SELFTEST] 序列完成，返回呼叫端。\r\n");
     fflush(stdout);
+    /* 注意：PD13(FIRE) 已於步驟 1 尾拉低；PD14 舵機此時為 TIM4 AF、PWM 已 Stop。
+     * 遠端 BENCH 呼叫端（main.c 診斷任務）須於返回後 Servo_HoldLow() 把 PD14 復位為 GPIO 低，
+     * 恢復部署前「無訊號」安全狀態再回歸正常 FSM。 */
+}
 
+#if FEATURE_PYRO_SELFTEST
+void PyroSelfTest_RunOnce(void)
+{
+    PyroSelfTest_RunSequence();
+    printf("[PYRO-SELFTEST] 停在此處（SYS 續閃，不進飛控）——電源重置可再測一次。\r\n");
+    fflush(stdout);
     /* 停在原地：SYS 續閃 + 餵狗，確保「一次重啟＝一次測試」，不落入正常 FSM。 */
     for (;;) {
         sys_led_pump();
@@ -138,5 +148,6 @@ void PyroSelfTest_RunOnce(void)
         HAL_Delay(50);
     }
 }
-
 #endif /* FEATURE_PYRO_SELFTEST */
+
+#endif /* PYRO_SELFTEST_AVAILABLE */

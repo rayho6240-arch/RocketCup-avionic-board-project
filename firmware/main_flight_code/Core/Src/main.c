@@ -45,6 +45,8 @@
 #include "uplink_cmd.h"     /* 上行手動開傘（FEATURE_UPLINK_DEPLOY 下編入；其餘為空） */
 #include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
 #include "usbd_cdc_if.h"    /* CDC_Transmit_FS（FEATURE_USB_DEBUG_LOG 下 printf 直通 USB 用） */
+#include "ack_proto.h"      /* 命令 ACK 幀 + ACK_OK/UNKNOWN/... 狀態碼（遠端指令回覆） */
+#include "uplink_text_proto.h" /* UPLINK_TEXT_MAX（遠端文字命令緩衝大小） */
 #include "vertical_filter.h" /* 垂直通道 3 狀態 Kalman（FEATURE_VFILTER 下於 FSM_Update 接線） */
 /* 版本資訊：版號為 board_config.h 的 FIRMWARE_VERSION（手動語意化版本）。
  * Makefile 建置前自動產生 build_version.h，補上 git 版次(FW_GIT) 與建置時間(FW_BUILD)；
@@ -2260,6 +2262,35 @@ void LoRaTelemetry_Task(void *argument)
             }
         }
 
+#if FEATURE_UPLINK_DEPLOY
+        /* === 命令 ACK 下行（主航電）====================================================
+         * 診斷任務執行完上行命令後經 UplinkCmd_SetAck 暫存一筆 ACK；此處取出並組 ack_proto 幀，
+         * 於接下來數個時槽經 433(E22)+920(E80) 各重送 ACK_TX_REPEAT 次（滿足「多傳幾次」，
+         * 對抗空中誤碼/漏收）。ACK 幀為單一連續位元組序列、與遙測封包在本任務內序列化送出，
+         * 不會 byte 交錯（地面站以 AckRx 於同一位元組流並排解析，sync 0xAC/0xCA 與遙測區隔）。 */
+        {
+            #define ACK_TX_REPEAT  4U
+            static uint8_t  s_ack_frame[ACK_FRAME_MAX];
+            static uint8_t  s_ack_frame_len = 0;
+            static uint8_t  s_ack_repeat = 0;
+            if (s_ack_repeat == 0U) {
+                uint8_t aseq = 0, astatus = 0, alen = 0;
+                char    atext[ACK_TEXT_MAX + 1];
+                if (UplinkCmd_TakePendingAck(&aseq, &astatus, atext, &alen)) {
+                    s_ack_frame_len = AckProto_Build(s_ack_frame, aseq, astatus, atext, alen);
+                    s_ack_repeat    = ACK_TX_REPEAT;
+                    printf("[ACK_TX] seq=%u status=%s cmd=\"%s\" ×%u\r\n",
+                           (unsigned)aseq, ack_status_str(astatus), atext, (unsigned)ACK_TX_REPEAT);
+                }
+            }
+            if (s_ack_repeat > 0U && s_ack_frame_len > 0U) {
+                if (lora433_ok) LoRaE22_Send(s_ack_frame, s_ack_frame_len);   /* 忙線跳過；靠重送命中 */
+                if (lora920_ok) LoRaE80_Send(s_ack_frame, s_ack_frame_len);
+                s_ack_repeat--;
+            }
+        }
+#endif /* FEATURE_UPLINK_DEPLOY */
+
         slot++;
         wake += LORA_TELEM_PERIOD_MS;
         osDelayUntil(wake);
@@ -2269,6 +2300,7 @@ void LoRaTelemetry_Task(void *argument)
 #if defined(ENABLE_DIAGNOSTICS) && !IS_GROUND
 void Poll_Serial_Commands(void);
 void Parse_Serial_Command(const char* cmd);
+uint8_t Parse_GetLastStatus(void);   /* Parse_Serial_Command 最後結果（ACK_*，見定義處） */
 
 void StartDiagnosticTask(void *argument)
 {
@@ -2279,6 +2311,40 @@ void StartDiagnosticTask(void *argument)
   {
 #if !FEATURE_LINK
       Poll_Serial_Commands();   /* USART2 文字命令台；FEATURE_LINK 時 USART2 改作板間鏈路 */
+#endif
+
+#if FEATURE_UPLINK_DEPLOY
+      /* === 遠端 433 上行命令執行（主航電）===================================
+       * 文字命令：餵 Parse_Serial_Command（複用整組本地命令：mag 校正/e22/e80/role…），
+       *   結果經 Parse_GetLastStatus 取回 → SetAck 回地面站。指令執行的 printf 同時走火箭
+       *   自身 USB CDC（FEATURE_USB_DEBUG_LOG 開啟時），即「ack 給 usb」。
+       * bench（桌面測試）：已過 uplink_cmd 的 ARM 閘；此處再加「僅限未起飛」閘
+       *   （STATE_PAD/INIT）——序列含 PD13 點火頭導通 8s + 舵機掃動，飛行中觸發會災難性。
+       *   通過 → 跑一次 PyroSelfTest_RunSequence()（阻塞 ~25s，自身餵狗；飛控 1kHz 任務照常
+       *   搶佔），返回後 Servo_HoldLow() 復位 PD14 為部署前安全低態，回歸正常 FSM，回 ACK。 */
+      {
+          char     ucmd[UPLINK_TEXT_MAX + 1];
+          uint8_t  useq = 0;
+          if (UplinkCmd_TakeTextCmd(ucmd, sizeof(ucmd), &useq)) {
+              Parse_Serial_Command(ucmd);
+              UplinkCmd_SetAck(useq, Parse_GetLastStatus(), ucmd);
+          }
+          uint8_t bseq = 0;
+          if (UplinkCmd_TakeBench(&bseq)) {
+              FlightState_t st = (FlightState_t)current_fsm_state;
+              if (st == STATE_INIT || st == STATE_PAD) {
+                  printf("[BENCH] 遠端桌面測試觸發（已過 ARM+未起飛閘）→ 跑一次 pyro/servo 序列\r\n");
+                  PyroSelfTest_RunSequence();
+                  Servo_HoldLow();   /* 復位 PD14 為部署前安全低態（無訊號） */
+                  printf("[BENCH] 序列完成，已回歸正常 FSM。\r\n");
+                  UplinkCmd_SetAck(bseq, ACK_OK, "bench");
+              } else {
+                  printf("[BENCH] 拒絕：已起飛（fsm=%u），bench 僅限發射架上。\r\n",
+                         (unsigned)current_fsm_state);
+                  UplinkCmd_SetAck(bseq, ACK_REJECTED, "bench");
+              }
+          }
+      }
 #endif
 
       if (tick % 50 == 0) {
@@ -2471,7 +2537,13 @@ static void cmd_print_help(void)
            "===========================================\r\n");
 }
 
+/* 最後一筆命令解析結果（ACK_OK/ACK_BADARG/ACK_UNKNOWN，見 ack_proto.h）：Parse_Serial_Command
+ * 進入時預設 OK，僅失敗分支覆寫；供遠端 433 文字命令的 ACK 判斷（診斷任務讀取）。 */
+static uint8_t g_parse_status = ACK_OK;
+uint8_t Parse_GetLastStatus(void) { return g_parse_status; }
+
 void Parse_Serial_Command(const char* cmd) {
+    g_parse_status = ACK_OK;
     if (strncmp(cmd, "CMD_MAG_CAL:", 12) == 0) {
         /* 整數 raw ADC counts（非浮點）：nano.specs 連結不支援浮點 sscanf/printf，
          * %f 這裡會靜默解析失敗（同一根因見昨天修的 8 處 printf("%f")）。硬鐵
@@ -2482,6 +2554,7 @@ void Parse_Serial_Command(const char* cmd) {
             EKF_SaveMagCalibration((float)cx, (float)cy, (float)cz);
         } else {
             printf("[CAL] ERROR: Invalid mag cal command format (expect integer raw ADC counts)\r\n");
+            g_parse_status = ACK_BADARG;
         }
         return;
     }
@@ -2490,6 +2563,8 @@ void Parse_Serial_Command(const char* cmd) {
         if (sscanf(cmd + 17, "%d", &val) == 1) {
             g_mag_yaw_lock = (val != 0) ? 1 : 0;
             printf("[CAL] EKF Mag Yaw Lock set to: %d\r\n", g_mag_yaw_lock);
+        } else {
+            g_parse_status = ACK_BADARG;
         }
         return;
     }
@@ -2542,6 +2617,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint8_t  ch  = 0;
             if (!e22_mhz_to_ch(mhz, &ch)) {
                 printf("[E22] freq 範圍 410-493 MHz\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2554,6 +2630,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint32_t lvl = (uint32_t)strtoul(tok[2], NULL, 10);
             if (lvl > 3U) {
                 printf("[E22] pwr 等級 0=30dBm 1=27dBm 2=24dBm 3=21dBm（3V3 供電建議 3）\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2565,6 +2642,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint32_t ar = (uint32_t)strtoul(tok[2], NULL, 10);
             if (ar > 7U) {
                 printf("[E22] air 速率 0=0.3k 1=1.2k 2=2.4k 3=4.8k 4=9.6k 5=19.2k 6=38.4k 7=62.5k\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2574,6 +2652,7 @@ void Parse_Serial_Command(const char* cmd) {
             else              printf("[E22] air rate set FAIL (st=%d)\r\n", (int)st);
         } else {
             printf("[E22] 未知子命令，輸入 help\r\n");
+            g_parse_status = ACK_UNKNOWN;
         }
 
     } else if (strcmp(tok[0], "e80") == 0 && n >= 2) {
@@ -2589,29 +2668,31 @@ void Parse_Serial_Command(const char* cmd) {
             cmd_e80_reconfig(hz, sf, bw, cr, pwr, pre);
         } else if (strcmp(tok[1], "sf") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
-            if (v < 7U || v > 12U) { printf("[E80] SF 範圍 7-12\r\n"); return; }
+            if (v < 7U || v > 12U) { printf("[E80] SF 範圍 7-12\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, (uint8_t)v, bw, cr, pwr, pre);
         } else if (strcmp(tok[1], "bw") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
             if (v > 0xFFU || !lora_bw_valid((uint8_t)v)) {
                 printf("[E80] BW idx 合法值: 0 1 2 3 4(125k) 5(250k) 6(500k) 8 9 10\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_e80_reconfig(f, sf, (uint8_t)v, cr, pwr, pre);
         } else if (strcmp(tok[1], "cr") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
-            if (v < 1U || v > 4U) { printf("[E80] CR 範圍 1-4\r\n"); return; }
+            if (v < 1U || v > 4U) { printf("[E80] CR 範圍 1-4\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, (uint8_t)v, pwr, pre);
         } else if (strcmp(tok[1], "pwr") == 0 && n >= 3) {
             int v = atoi(tok[2]);
-            if (v < -9 || v > 22) { printf("[E80] pwr 範圍 -9~22 dBm\r\n"); return; }
+            if (v < -9 || v > 22) { printf("[E80] pwr 範圍 -9~22 dBm\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, cr, (int8_t)v, pre);
         } else if (strcmp(tok[1], "pre") == 0 && n >= 3) {
             long v = atol(tok[2]);
-            if (v < 6 || v > 65535) { printf("[E80] preamble 6~65535\r\n"); return; }
+            if (v < 6 || v > 65535) { printf("[E80] preamble 6~65535\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, cr, pwr, (uint16_t)v);
         } else {
             printf("[E80] 未知子命令，輸入 help\r\n");
+            g_parse_status = ACK_UNKNOWN;
         }
 #else
     } else if (strcmp(tok[0], "e22") == 0 || strcmp(tok[0], "e80") == 0) {
@@ -2625,6 +2706,7 @@ void Parse_Serial_Command(const char* cmd) {
         }
     } else {
         printf("[CMD] 未知命令 '%s'，輸入 help\r\n", tok[0]);
+        g_parse_status = ACK_UNKNOWN;
     }
 }
 

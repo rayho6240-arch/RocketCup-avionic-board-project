@@ -5,7 +5,7 @@ CC      ?= cc
 CFLAGS  := -I../firmware/main_flight_code/Core/Inc -Wall -Wextra -O2 -std=c11
 LDLIBS  := -lm
 
-BINS := test_sensor_axis test_fsm test_fsm_elevator test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto test_vertical_filter
+BINS := test_sensor_axis test_fsm test_fsm_elevator test_ekf_guard test_sensor_health test_telemetry test_telem_rx test_gs_timesync test_gs_log test_gps test_flash_ring test_link_proto test_link test_lora_calc test_uplink_proto test_ack_proto test_vertical_filter
 
 .PHONY: run clean
 
@@ -65,8 +65,11 @@ test_link: test_link.c ../firmware/main_flight_code/Core/Src/link.c ../firmware/
 test_lora_calc: test_lora_calc.c ../firmware/main_flight_code/Core/Inc/lora_calc.h
 	$(CC) $(CFLAGS) -o $@ test_lora_calc.c $(LDLIBS)
 
-test_uplink_proto: test_uplink_proto.c ../firmware/main_flight_code/Core/Inc/uplink_proto.h ../firmware/main_flight_code/Core/Inc/crc16.h
+test_uplink_proto: test_uplink_proto.c ../firmware/main_flight_code/Core/Inc/uplink_proto.h ../firmware/main_flight_code/Core/Inc/uplink_text_proto.h ../firmware/main_flight_code/Core/Inc/crc16.h
 	$(CC) $(CFLAGS) -o $@ test_uplink_proto.c $(LDLIBS)
+
+test_ack_proto: test_ack_proto.c ../firmware/main_flight_code/Core/Inc/ack_proto.h ../firmware/main_flight_code/Core/Inc/crc16.h
+	$(CC) $(CFLAGS) -o $@ test_ack_proto.c $(LDLIBS)
 
 test_vertical_filter: test_vertical_filter.c ../firmware/main_flight_code/Core/Inc/vertical_filter.h
 	$(CC) $(CFLAGS) -o $@ test_vertical_filter.c $(LDLIBS)

@@ -33,7 +33,11 @@
 
 #include "board_config.h"
 
-#if FEATURE_PYRO_SELFTEST
+/* 本模組編入條件：開機自測（FEATURE_PYRO_SELFTEST）或遠端桌面測試（FEATURE_UPLINK_DEPLOY
+ * 經 433 BENCH 命令觸發，見 uplink_cmd.c / main.c）。任一開啟即需要序列函式與參數。 */
+#define PYRO_SELFTEST_AVAILABLE  (FEATURE_PYRO_SELFTEST || FEATURE_UPLINK_DEPLOY)
+
+#if PYRO_SELFTEST_AVAILABLE
 
 /* === 可調參數 ===
  * 步驟 1（PD13 副傘馬達導通時間）改為直接沿用飛行常數 FSM_DROGUE_MOTOR_RUN_MS(8s)，
@@ -86,11 +90,20 @@
 #endif
 
 /*
- * 執行一次開傘電火自測序列後「不返回」（停在無窮迴圈，續閃 SYS 並餵 IWDG）。
- * 應在周邊初始化（MX_GPIO_Init / MX_TIM4_Init / MX_TIM2_Init / MX_IWDG_Init）與
- * 開機橫幅之後、進入正常飛控前呼叫。
+ * 執行「一次」開傘電火自測序列後「返回」（含退避倒數、Buzzer、LED、PD13/舵機動作）。
+ * 阻塞約 ~25s，過程自行餵 IWDG。呼叫端須確保周邊已初始化，且結束後負責把輸出恢復到
+ * 部署前安全狀態（PD13 已於序列尾拉低；PD14 舵機由呼叫端 Servo_HoldLow 復位——遠端 BENCH
+ * 走此函式，見 main.c 診斷任務）。開機自測（FEATURE_PYRO_SELFTEST）則由 RunOnce 呼叫本函式。
+ */
+void PyroSelfTest_RunSequence(void);
+
+#if FEATURE_PYRO_SELFTEST
+/*
+ * 開機自測：跑一次序列後「不返回」（停在無窮迴圈，續閃 SYS 並餵 IWDG），確保「每次重啟＝
+ * 一次測試」不落入正常 FSM。應在周邊初始化與開機橫幅之後、進入正常飛控前呼叫。
  */
 void PyroSelfTest_RunOnce(void);
+#endif
 
-#endif /* FEATURE_PYRO_SELFTEST */
+#endif /* PYRO_SELFTEST_AVAILABLE */
 #endif /* PYRO_SELFTEST_H */

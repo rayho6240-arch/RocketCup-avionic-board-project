@@ -8,8 +8,11 @@
 
 #include "uplink_cmd.h"
 #include "uplink_proto.h"
+#include "uplink_text_proto.h"   /* 文字上行幀（0x55/0xBB）：帶參數指令 → Parse_Serial_Command */
+#include "ack_proto.h"           /* ACK 狀態碼 ACK_OK/UNKNOWN/... */
 #include "main.h"
 #include <stdio.h>
+#include <string.h>
 
 /* ARM 窗逾時：武裝後若 N ms 內未開傘，自動解除（防誤觸與遺留武裝）。 */
 #ifndef UPLINK_ARM_TIMEOUT_MS
@@ -24,13 +27,30 @@ static volatile uint8_t  s_ring[U3R_SZ];
 static volatile uint16_t s_head = 0, s_tail = 0;
 static uint8_t           s_rxbuf[32];   /* ReceiveToIdle 暫存 */
 
-static UplinkRx_t s_rx;
+static UplinkRx_t     s_rx;       /* 二進制幀（ARM/DEPLOY/BENCH） */
+static UplinkTextRx_t s_trx;      /* 文字幀（帶參數指令） */
 
 /* ---- 武裝 / 待辦開傘 ---- */
 static uint8_t           s_armed = 0;
 static uint32_t          s_arm_tick = 0;
 static volatile uint8_t  s_pending_drogue = 0;
 static volatile uint8_t  s_pending_main   = 0;
+
+/* ---- 待辦文字命令（診斷任務取走 → Parse_Serial_Command） ---- */
+static volatile uint8_t  s_pending_text = 0;
+static char              s_text[UPLINK_TEXT_MAX + 1];
+static uint8_t           s_text_seq = 0;
+
+/* ---- 待辦 bench（已過 ARM 閘；pad-only 閘由執行端 main.c 再查） ---- */
+static volatile uint8_t  s_pending_bench = 0;
+static uint8_t           s_bench_seq = 0;
+
+/* ---- 待送 ACK（執行端 SetAck 寫、遙測任務 TakePendingAck 取；best-effort 單槽） ---- */
+static char              s_ack_text[ACK_TEXT_MAX + 1];
+static uint8_t           s_ack_len = 0;
+static uint8_t           s_ack_seq = 0;
+static uint8_t           s_ack_status = 0;
+static volatile uint8_t  s_ack_valid = 0;   /* 最後寫，確保緩衝先填妥 */
 
 /* ---- 診斷 ---- */
 static uint8_t  s_last_cmd = 0;
@@ -51,11 +71,15 @@ static int ring_pop(uint8_t *b)
 void UplinkCmd_Init(void)
 {
     UplinkRx_Init(&s_rx);
+    UplinkTextRx_Init(&s_trx);
     s_armed = 0;
     s_pending_drogue = 0;
     s_pending_main = 0;
+    s_pending_text = 0;
+    s_pending_bench = 0;
+    s_ack_valid = 0;
     HAL_UARTEx_ReceiveToIdle_IT(&huart3, s_rxbuf, sizeof(s_rxbuf));
-    printf("[UPLINK] 上行命令接收就緒（433 反向鏈路，ARM->DEPLOY 兩段式）\r\n");
+    printf("[UPLINK] 上行命令接收就緒（433 反向鏈路：二進制 ARM->DEPLOY/BENCH + 文字指令幀）\r\n");
 }
 
 void UplinkCmd_OnUart3RxEvent(uint16_t size)
@@ -84,27 +108,47 @@ void UplinkCmd_Poll(uint32_t now_ms)
     }
 
     uint8_t b, cmd = 0, arg = 0, seq = 0;
+    char    tseq_text[UPLINK_TEXT_MAX + 1];
+    uint8_t tlen = 0, tseq = 0;
     while (ring_pop(&b)) {
+        /* 同一位元組流並排餵兩個解析器：各自忽略不符自身 sync 的位元組，互不干擾。 */
+
+        /* --- 文字命令幀（0x55/0xBB）：帶參數指令 → 交診斷任務餵 Parse_Serial_Command --- */
+        if (UplinkTextRx_Feed(&s_trx, b, tseq_text, &tlen, &tseq)) {
+            if (!s_pending_text) {            /* 前一筆尚未被取走則丟棄本筆（極少見；避免覆蓋） */
+                memcpy(s_text, tseq_text, (size_t)tlen + 1U);
+                s_text_seq = tseq;
+                s_pending_text = 1;           /* 最後設，確保 s_text 已填妥 */
+                printf("[UPLINK] 文字命令 seq=%u: \"%s\"\r\n", (unsigned)tseq, s_text);
+            }
+            continue;
+        }
+
+        /* --- 二進制幀（0x55/0xAA）：ARM/DISARM/DEPLOY/BENCH --- */
         if (!UplinkRx_Feed(&s_rx, b, &cmd, &arg, &seq)) continue;
         s_last_cmd = cmd;
         switch (cmd) {
             case UPLINK_CMD_PING:
                 printf("[UPLINK] PING seq=%u（armed=%u）\r\n", (unsigned)seq, (unsigned)s_armed);
+                UplinkCmd_SetAck(seq, ACK_OK, "ping");
                 break;
             case UPLINK_CMD_ARM:
                 s_armed = 1; s_arm_tick = now_ms;
                 printf("[UPLINK] *** ARMED ***（%lus 內有效）\r\n",
                        (unsigned long)(UPLINK_ARM_TIMEOUT_MS / 1000U));
+                UplinkCmd_SetAck(seq, ACK_OK, "arm");
                 break;
             case UPLINK_CMD_DISARM:
                 s_armed = 0;
                 printf("[UPLINK] DISARMED\r\n");
+                UplinkCmd_SetAck(seq, ACK_OK, "disarm");
                 break;
             case UPLINK_CMD_DEPLOY_DROGUE:
             case UPLINK_CMD_DEPLOY_MAIN:
             case UPLINK_CMD_DEPLOY_BOTH:
                 if (!s_armed) {
                     printf("[UPLINK] 開傘命令忽略：未武裝（先送 ARM）\r\n");
+                    UplinkCmd_SetAck(seq, ACK_UNARMED, "deploy");
                     break;
                 }
                 if (cmd != UPLINK_CMD_DEPLOY_MAIN)   s_pending_drogue = 1;
@@ -112,9 +156,25 @@ void UplinkCmd_Poll(uint32_t now_ms)
                 printf("[UPLINK] *** 手動開傘 *** drogue=%u main=%u\r\n",
                        (unsigned)(cmd != UPLINK_CMD_DEPLOY_MAIN),
                        (unsigned)(cmd != UPLINK_CMD_DEPLOY_DROGUE));
+                UplinkCmd_SetAck(seq, ACK_OK, "deploy");
+                break;
+            case UPLINK_CMD_BENCH:
+                /* 桌面測試（跑一次 pyro/servo 自測後回歸）：ARM 閘在此，pad-only 閘由執行端
+                 * main.c 再查（那裡有 current_fsm_state）。未 ARM → 立即回 UNARMED、不排程。 */
+                if (!s_armed) {
+                    printf("[UPLINK] BENCH 忽略：未武裝（先送 ARM）\r\n");
+                    UplinkCmd_SetAck(seq, ACK_UNARMED, "bench");
+                    break;
+                }
+                if (!s_pending_bench) {
+                    s_bench_seq = seq;
+                    s_pending_bench = 1;
+                    printf("[UPLINK] *** BENCH 已排程 ***（過 ARM 閘；執行端再查未起飛閘）\r\n");
+                }
                 break;
             default:
                 printf("[UPLINK] 未知命令 0x%02X\r\n", (unsigned)cmd);
+                UplinkCmd_SetAck(seq, ACK_UNKNOWN, NULL);
                 break;
         }
     }
@@ -128,6 +188,57 @@ uint8_t UplinkCmd_TakeDeploy(uint8_t *want_drogue, uint8_t *want_main)
     if (s_pending_main)   { if (want_main)   *want_main   = 1; s_pending_main   = 0; any = 1; }
     else if (want_main)   *want_main = 0;
     return any;
+}
+
+uint8_t UplinkCmd_TakeTextCmd(char *out, uint16_t sz, uint8_t *seq)
+{
+    if (!s_pending_text) return 0;
+    if (out && sz > 0U) {
+        size_t n = strlen(s_text);
+        if (n > (size_t)(sz - 1U)) n = (size_t)(sz - 1U);
+        memcpy(out, s_text, n);
+        out[n] = '\0';
+    }
+    if (seq) *seq = s_text_seq;
+    s_pending_text = 0;   /* 消費後清，讓下一筆可入 */
+    return 1;
+}
+
+uint8_t UplinkCmd_TakeBench(uint8_t *seq)
+{
+    if (!s_pending_bench) return 0;
+    if (seq) *seq = s_bench_seq;
+    s_pending_bench = 0;
+    return 1;
+}
+
+void UplinkCmd_SetAck(uint8_t seq, uint8_t status, const char *text)
+{
+    uint8_t len = 0;
+    if (text) {
+        size_t n = strlen(text);
+        if (n > ACK_TEXT_MAX) n = ACK_TEXT_MAX;
+        memcpy(s_ack_text, text, n);
+        s_ack_text[n] = '\0';
+        len = (uint8_t)n;
+    } else {
+        s_ack_text[0] = '\0';
+    }
+    s_ack_len    = len;
+    s_ack_seq    = seq;
+    s_ack_status = status;
+    s_ack_valid  = 1;     /* 最後設，確保上面欄位已填妥 */
+}
+
+uint8_t UplinkCmd_TakePendingAck(uint8_t *seq, uint8_t *status, char *out_text, uint8_t *out_len)
+{
+    if (!s_ack_valid) return 0;
+    if (seq)    *seq    = s_ack_seq;
+    if (status) *status = s_ack_status;
+    if (out_text) { memcpy(out_text, s_ack_text, (size_t)s_ack_len + 1U); }
+    if (out_len)  *out_len = s_ack_len;
+    s_ack_valid = 0;
+    return 1;
 }
 
 uint8_t UplinkCmd_IsArmed(void) { return s_armed; }
