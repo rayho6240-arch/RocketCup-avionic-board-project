@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "telem_rx.h"
+#include "ack_proto.h"     /* 主航電對上行命令的下行 ACK 幀（與遙測同流並排解析） */
 #include "gs_timesync.h"
 #include "gs_log.h"
 #include "gs_lora_test.h"
@@ -48,6 +49,8 @@ extern uint8_t lora920_ok;         /* E80 920MHz 模組就緒狀態（main.c 定
 /* ---- 狀態 ---- */
 static TelemRx_t     s_rx433;
 static TelemRx_t     s_rx920;
+static AckRx_t       s_ack433;   /* 命令 ACK 解析（與遙測同一位元組流並排，sync 0xAC/0xCA） */
+static AckRx_t       s_ack920;
 static GsTimeSync_t  s_ts;
 static uint32_t      s_last_fix_tick = 0;
 static uint32_t      s_stat_433_cnt = 0;
@@ -318,6 +321,8 @@ void GroundStation_Run(void)
 
     TelemRx_Init(&s_rx433);
     TelemRx_Init(&s_rx920);
+    AckRx_Init(&s_ack433);
+    AckRx_Init(&s_ack920);
     GsTimeSync_Init(&s_ts);
     gs_sd_open();
     gs_flash_init();
@@ -343,6 +348,16 @@ void GroundStation_Run(void)
         uint8_t b;
         TelemetryPacket_t pkt;
         while (u3_pop(&b)) {
+            /* 命令 ACK（sync 0xAC/0xCA）與遙測（0xA5/0x5A）並排解析：AckRx 忽略非自身 sync
+             * 位元組，互不干擾。解出即印 [ACK]（走地面 printf→USART2，GUI 看得到）。 */
+            {
+                uint8_t aseq = 0, ast = 0, alen = 0;
+                char    atext[ACK_TEXT_MAX + 1];
+                if (AckRx_Feed(&s_ack433, b, &aseq, &ast, atext, &alen)) {
+                    printf("[ACK] link:433 seq:%u status:%s cmd:\"%s\"\r\n",
+                           (unsigned)aseq, ack_status_str(ast), atext);
+                }
+            }
             uint8_t crc_ok = 0;
             if (TelemRx_FeedAny(&s_rx433, b, &pkt, &crc_ok)) {
                 int16_t rssi = GS_RSSI_NA;
@@ -368,6 +383,14 @@ void GroundStation_Run(void)
             HAL_StatusTypeDef rx_st = LoRaE80_ReadPacket(s_e80buf, &el, &rssi, &snr);
             if (rx_st == HAL_OK) {
                 for (uint8_t i = 0; i < el; i++) {
+                    {
+                        uint8_t aseq = 0, ast = 0, alen = 0;
+                        char    atext[ACK_TEXT_MAX + 1];
+                        if (AckRx_Feed(&s_ack920, s_e80buf[i], &aseq, &ast, atext, &alen)) {
+                            printf("[ACK] link:920 seq:%u status:%s cmd:\"%s\"\r\n",
+                                   (unsigned)aseq, ack_status_str(ast), atext);
+                        }
+                    }
                     uint8_t crc_ok = 0;
                     if (TelemRx_FeedAny(&s_rx920, s_e80buf[i], &pkt, &crc_ok)) {
                         if (crc_ok) {

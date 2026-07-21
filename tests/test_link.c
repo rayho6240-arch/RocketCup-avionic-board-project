@@ -11,6 +11,7 @@
  *   [5] 情境C：主板在線但從不送開傘通知 → 備板 grace 到期自行點火
  *   [6] 情境D：grace 期間才收到主板開傘 → 備板抑制
  *   [7] 點火不重複：已點火後即使 FSM 再次要求亦不重複輸出
+ *   [8] LinkPeer_Synced：雙向心跳 echo（對端 ack_state 回報已採用我方狀態）＝ACK 確認
  */
 #include <stdio.h>
 #include <string.h>

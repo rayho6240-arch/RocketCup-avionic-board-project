@@ -42,6 +42,37 @@ void UplinkCmd_Poll(uint32_t now_ms);
  */
 uint8_t UplinkCmd_TakeDeploy(uint8_t *want_drogue, uint8_t *want_main);
 
+/**
+ * @brief 取出並清除待辦的文字命令（一次性消費）。由診斷任務呼叫 → 餵 Parse_Serial_Command。
+ * @param out  緩衝區，須 >= UPLINK_TEXT_MAX+1（含結尾 NUL）。
+ * @param sz   out 大小。
+ * @param seq  輸出：對應上行幀 seq（供 ACK 回填）。
+ * @return 1 = 有一筆待辦文字命令；0 = 無。
+ */
+uint8_t UplinkCmd_TakeTextCmd(char *out, uint16_t sz, uint8_t *seq);
+
+/**
+ * @brief 取出並清除待辦的 bench（桌面測試）請求（一次性消費，已過 ARM 閘）。
+ * @param seq 輸出：對應上行幀 seq（供 ACK 回填）。
+ * @return 1 = 有待辦 bench；0 = 無。
+ */
+uint8_t UplinkCmd_TakeBench(uint8_t *seq);
+
+/**
+ * @brief 設定一筆待送 ACK（覆蓋前一筆未取走者）。由執行端（診斷任務）於命令執行後呼叫。
+ * @param seq    對應命令 seq
+ * @param status ACK_OK / ACK_UNKNOWN / ACK_BADARG / ACK_UNARMED / ACK_REJECTED（ack_proto.h）
+ * @param text   echo 文字（可 NULL）；過長自動截斷至 ACK_TEXT_MAX。
+ */
+void UplinkCmd_SetAck(uint8_t seq, uint8_t status, const char *text);
+
+/**
+ * @brief 取出並清除待送 ACK（一次性消費）。由遙測任務呼叫後經無線送出。
+ * @param seq/status 輸出。out_text 緩衝須 >= ACK_TEXT_MAX+1。out_len 輸出文字長度。
+ * @return 1 = 有待送 ACK；0 = 無。
+ */
+uint8_t UplinkCmd_TakePendingAck(uint8_t *seq, uint8_t *status, char *out_text, uint8_t *out_len);
+
 /** @brief 目前是否武裝（ARM 窗內）。 */
 uint8_t UplinkCmd_IsArmed(void);
 

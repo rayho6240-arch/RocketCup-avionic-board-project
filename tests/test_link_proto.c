@@ -3,7 +3,7 @@
  * ===========================================================================
  *   cd tests && make run
  *
- *   [1] LinkPacket_t 大小 = 26 bytes，欄位 byte offset 逐一鎖定（解碼契約）
+ *   [1] LinkPacket_t 大小 = 27 bytes，欄位 byte offset 逐一鎖定（解碼契約）
  *   [2] LinkProto_Build → LinkRx_Feed 往返一致（含 sync 對齊與 CRC）
  *   [3] 單一位元翻轉 → CRC 不符 → 不吐封包
  *   [4] 前綴雜訊 / 連續兩筆 → 正確對齊並解出

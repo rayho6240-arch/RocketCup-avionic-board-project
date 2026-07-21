@@ -12,6 +12,7 @@
 #include "telemetry.h"     /* TELEM_PACKET_SIZE（空中時間估算用） */
 #include "lora_calc.h"     /* 純換算 + lora_stats_t */
 #include "uplink_proto.h"  /* 上行手動開傘命令框架（與火箭端共用） */
+#include "uplink_text_proto.h" /* 上行文字命令框架（tx 中繼；與火箭端共用） */
 #include "lora_e22.h"
 #include "lora_e80.h"
 #include "main.h"
@@ -102,13 +103,18 @@ static void print_help(void)
            "  e80 init          重新初始化 E80 並進入接收\r\n"
            "  e80 rxstart       重新進入連續接收\r\n"
            "  e80 airtime <len> 估算指定 payload 長度的空中時間\r\n"
-           "  --- 上行手動開傘（433 反向，兩段式安全）---\r\n"
+           "  --- 遠端指令中繼到主航電（433 反向）---\r\n"
+           "  tx <指令>         把整串原文送給主航電執行（複用其命令台：role/help/\r\n"
+           "                    e22.../e80.../CMD_MAG_CAL:.../CMD_MAG_YAW_LOCK:...），\r\n"
+           "                    火箭回下行 [ACK] 確認。例：tx role / tx e80 sf 9\r\n"
+           "  --- 上行手動開傘 / 桌面測試（兩段式安全，須先 arm）---\r\n"
            "  ping              連線測試（火箭印出，不動作）\r\n"
-           "  arm               武裝（火箭 30s 內允許開傘）\r\n"
+           "  arm               武裝（火箭 30s 內允許開傘/bench）\r\n"
            "  disarm            解除武裝\r\n"
            "  deploy drogue     手動開副傘（須先 arm）\r\n"
            "  deploy main       手動開主傘（須先 arm）\r\n"
            "  deploy both       手動同時開副傘+主傘（須先 arm）\r\n"
+           "  bench             桌面測試：跑一次 pyro/servo 自測後回歸（須先 arm＋僅限未起飛）\r\n"
            "=====================================================\r\n");
 }
 
@@ -214,6 +220,29 @@ static void uplink_send(uint8_t cmd, uint8_t arg, const char *label)
     printf("[UPLINK] %s 送出完畢（看下行 DROGUE_FIRED/MAIN_DEPLOYED 旗標確認）\r\n", label);
 }
 
+/* 中繼文字命令到主航電（tx <原文>）：以 uplink_text_proto 幀 burst 送。text 為「原始大小寫」
+ * ——火箭 Parse_Serial_Command 的 CMD_MAG_CAL: 等以大寫比對，故不可先轉小寫。 */
+static void uplink_send_text(const char *text)
+{
+    uint8_t len = (uint8_t)strlen(text);
+    if (len == 0U) { printf("[UPLINK] tx 需要指令內容，例：tx role / tx e80 sf 9\r\n"); return; }
+    if (len > UPLINK_TEXT_MAX) {
+        printf("[UPLINK] 指令過長 %u > %u，已截斷\r\n", (unsigned)len, (unsigned)UPLINK_TEXT_MAX);
+        len = UPLINK_TEXT_MAX;
+    }
+    uint8_t f[UPLINK_TEXT_FRAME_MAX];
+    uint8_t seq = s_uplink_seq++;
+    uint8_t n = UplinkTextProto_Build(f, text, len, seq);
+    printf("[UPLINK] 送文字命令 seq=%u \"%.*s\" ×%u burst (~3s)…\r\n",
+           (unsigned)seq, (int)len, text, (unsigned)UPLINK_TX_REPEAT);
+    for (uint8_t i = 0; i < UPLINK_TX_REPEAT; i++) {
+        LoRaE22_Send(f, n);
+        HAL_IWDG_Refresh(&hiwdg);
+        osDelay(UPLINK_TX_GAP_MS);
+    }
+    printf("[UPLINK] 文字命令送出完畢（等火箭下行 [ACK]）\r\n");
+}
+
 /* ============================================================
  *  命令解析
  * ============================================================ */
@@ -221,6 +250,16 @@ static void str_tolower(char *s) { for (; *s; s++) *s = (char)tolower((unsigned 
 
 static void dispatch_cmd(char *line)
 {
+    /* 中繼文字命令 tx <原文>：須在 str_tolower「之前」擷取原始大小寫（火箭 CMD_MAG_CAL:
+     * 等以大寫比對）。只有 "tx" 關鍵字本身容忍大小寫。 */
+    if ((line[0] == 't' || line[0] == 'T') && (line[1] == 'x' || line[1] == 'X') &&
+        (line[2] == ' ' || line[2] == '\t')) {
+        const char *p = line + 2;
+        while (*p == ' ' || *p == '\t') p++;
+        uplink_send_text(p);
+        return;
+    }
+
     str_tolower(line);
 
     char *tok[4] = {NULL, NULL, NULL, NULL};
@@ -250,6 +289,10 @@ static void dispatch_cmd(char *line)
 
     } else if (strcmp(tok[0], "disarm") == 0) {
         uplink_send(UPLINK_CMD_DISARM, 0, "DISARM");
+
+    } else if (strcmp(tok[0], "bench") == 0) {
+        /* 桌面測試：跑一次 pyro/servo 自測後回歸。火箭端須先 arm ＋僅限未起飛才會執行。 */
+        uplink_send(UPLINK_CMD_BENCH, 0, "BENCH");
 
     } else if (strcmp(tok[0], "deploy") == 0 && n >= 2) {
         if (strcmp(tok[1], "drogue") == 0) {

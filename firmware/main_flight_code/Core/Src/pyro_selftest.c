@@ -1,13 +1,14 @@
 /*
- * pyro_selftest.c — 開傘地面點火自測（PD13 引爆 + PD14 舵機 + LED/Buzzer，重啟後跑一次）
+ * pyro_selftest.c — 開傘地面點火自測（對稱：主/副兩板同一序列，重啟後跑一次）
  * 詳見 pyro_selftest.h 的序列 / 腳位 / 啟用 / 刪除說明。整檔以 FEATURE_PYRO_SELFTEST 包住。
  */
 #include "pyro_selftest.h"
 
-#if FEATURE_PYRO_SELFTEST
+#if PYRO_SELFTEST_AVAILABLE
 
 #include <stdio.h>
 #include "main.h"        /* FIRE(PD13) / PWM_Servo(PD14) / LED_SYS(PE2) / LED_STAT2(PE4) 腳位 */
+#include "fsm.h"         /* FSM_DROGUE_MOTOR_RUN_MS：副傘 DC 馬達導通時間（與飛行一致，8s） */
 
 /* 由 main.c 建立的周邊 handle。 */
 extern TIM_HandleTypeDef  htim2;   /* Buzzer   : TIM2 CH1 */
@@ -51,18 +52,19 @@ static void buzzer_beep(uint32_t ms)
     htim2.Instance->CCR1 = 0U;
 }
 
-void PyroSelfTest_RunOnce(void)
+void PyroSelfTest_RunSequence(void)
 {
     printf("\r\n============================================================\r\n");
-    printf("[PYRO-SELFTEST] 開傘電火自測（每次重啟跑一次）\r\n");
-    printf("[PYRO-SELFTEST] 序列：PD13 拉高 %ums → 等 %ums → 舵機 0°→180°(停 %ums)→0°\r\n",
-           (unsigned)PYRO_SELFTEST_FIRE_MS, (unsigned)PYRO_SELFTEST_GAP_MS,
+    printf("[PYRO-SELFTEST] 開傘電火自測（主/副同序列，每次重啟跑一次）\r\n");
+    printf("[PYRO-SELFTEST] 序列：PD13 副傘馬達 %ums → 等 %ums → 舵機 0°→180°(停 %ums)→0°\r\n",
+           (unsigned)FSM_DROGUE_MOTOR_RUN_MS, (unsigned)PYRO_SELFTEST_GAP_MS,
            (unsigned)PYRO_SELFTEST_SERVO_HOLD_MS);
     printf("[PYRO-SELFTEST] LED: SYS(PE2)閃 / State1(PE3)=PD13高 / State2(PE4)=舵機PWM\r\n");
     printf("[PYRO-SELFTEST] ⚠ PD13 會實際導通引爆 MOSFET，確認負載安全再繼續！\r\n");
     fflush(stdout);
 
-    /* 起始安全狀態：FIRE 拉低、State1/State2 熄、SYS 起閃。 */
+    /* 起始安全狀態：FIRE 拉低、State1/State2 熄、SYS 起閃。
+     * PD14 已於 main.c Servo_HoldLow()（開機）拉為 GPIO 低，此處不動，維持部署前無訊號。 */
     HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_OFF);
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_OFF);
@@ -81,55 +83,42 @@ void PyroSelfTest_RunOnce(void)
         delay_fed(1000U);
     }
 
-    /* === 步驟 1：PD13 (FIRE) 拉高 6s，State1 LED 亮 === */
+    /* === 步驟 1：PD13 (FIRE / 副傘 DC 馬達) 拉高 FSM_DROGUE_MOTOR_RUN_MS(8s)，State1 LED 亮 === */
     printf("[PYRO-SELFTEST] [1] PD13(FIRE)=HIGH + State1 亮，維持 %ums\r\n",
-           (unsigned)PYRO_SELFTEST_FIRE_MS);
+           (unsigned)FSM_DROGUE_MOTOR_RUN_MS);
     fflush(stdout);
     HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_ON);
     HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);
-    delay_fed(PYRO_SELFTEST_FIRE_MS);
+    delay_fed(FSM_DROGUE_MOTOR_RUN_MS);
     HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOE, PYRO_LED_STATE1_Pin, PYRO_LED_OFF);
     printf("[PYRO-SELFTEST] [1] PD13(FIRE)=LOW + State1 熄\r\n");
     fflush(stdout);
 
-    /* === 步驟 2：等待 5s === */
+    /* === 步驟 2：等待 === */
     printf("[PYRO-SELFTEST] [2] 等待 %ums\r\n", (unsigned)PYRO_SELFTEST_GAP_MS);
     fflush(stdout);
     delay_fed(PYRO_SELFTEST_GAP_MS);
 
-    /* === 步驟 2.5：在 PWM 啟動前，先拉高 PWM 腳位 (PD14) 1 秒 === */
-    printf("[PYRO-SELFTEST] [2.5] 先拉高 PWM 腳位 (PD14) 1s...\r\n");
-    fflush(stdout);
+    /* === 步驟 3：PD14 由 GPIO 低切回 TIM4 AF，舵機 0°→180°→(停)→0°，PWM 期間 State2 LED 亮 ===
+     * 部署前 PD14 一直是硬體低；此處才切 AF 啟動 PWM（比照 main.c Servo_DeployMain 的紀律）。 */
     {
-        GPIO_InitTypeDef GPIO_InitStruct = {0};
-        GPIO_InitStruct.Pin = PWM_Servo_Pin;
-        GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-        GPIO_InitStruct.Pull = GPIO_NOPULL;
-        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &GPIO_InitStruct);
-        HAL_GPIO_WritePin(PWM_Servo_GPIO_Port, PWM_Servo_Pin, GPIO_PIN_SET);
+        GPIO_InitTypeDef gi = {0};
+        gi.Pin       = PWM_Servo_Pin;
+        gi.Mode      = GPIO_MODE_AF_PP;
+        gi.Pull      = GPIO_NOPULL;
+        gi.Speed     = GPIO_SPEED_FREQ_LOW;
+        gi.Alternate = GPIO_AF2_TIM4;
+        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);
     }
-    delay_fed(1000U);
-    {
-        GPIO_InitTypeDef GPIO_InitStruct = {0};
-        GPIO_InitStruct.Pin = PWM_Servo_Pin;
-        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-        GPIO_InitStruct.Pull = GPIO_NOPULL;
-        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-        GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-        HAL_GPIO_Init(PWM_Servo_GPIO_Port, &GPIO_InitStruct);
-    }
-
-    /* === 步驟 3：舵機 0°→180°→(停)→0°，PWM 期間 State2 LED 亮 === */
     printf("[PYRO-SELFTEST] [3] 舵機 PWM 啟動 + State2 亮：0°(%uus)→180°(%uus)\r\n",
            (unsigned)PYRO_SELFTEST_SERVO_0DEG_US, (unsigned)PYRO_SELFTEST_SERVO_180DEG_US);
     fflush(stdout);
+    servo_set_us(PYRO_SELFTEST_SERVO_0DEG_US);         /* 先定 0° 再啟 PWM，避免首幀跳到殘值 */
     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_ON);
-    servo_set_us(PYRO_SELFTEST_SERVO_0DEG_US);
-    delay_fed(500U);                                   /* 先歸 0° 定位 */
-    servo_set_us(PYRO_SELFTEST_SERVO_180DEG_US);
+    delay_fed(500U);                                   /* 歸 0° 定位 */
+    servo_set_us(PYRO_SELFTEST_SERVO_180DEG_US);       /* 轉 180° */
     delay_fed(PYRO_SELFTEST_SERVO_HOLD_MS);
     printf("[PYRO-SELFTEST] [3] 舵機 180°→0°(%uus)\r\n",
            (unsigned)PYRO_SELFTEST_SERVO_0DEG_US);
@@ -139,9 +128,19 @@ void PyroSelfTest_RunOnce(void)
     HAL_TIM_PWM_Stop(&htim4, TIM_CHANNEL_3);           /* 停 PWM */
     HAL_GPIO_WritePin(LED_STAT2_GPIO_Port, LED_STAT2_Pin, PYRO_LED_OFF);
 
-    printf("[PYRO-SELFTEST] 完成。停在此處（SYS 續閃，不進飛控）——電源重置可再測一次。\r\n");
+    printf("[PYRO-SELFTEST] 序列完成，返回呼叫端。\r\n");
     fflush(stdout);
+    /* 注意：PD13(FIRE) 已於步驟 1 尾拉低；PD14 舵機此時為 TIM4 AF、PWM 已 Stop。
+     * 遠端 BENCH 呼叫端（main.c 診斷任務）須於返回後 Servo_HoldLow() 把 PD14 復位為 GPIO 低，
+     * 恢復部署前「無訊號」安全狀態再回歸正常 FSM。 */
+}
 
+#if FEATURE_PYRO_SELFTEST
+void PyroSelfTest_RunOnce(void)
+{
+    PyroSelfTest_RunSequence();
+    printf("[PYRO-SELFTEST] 停在此處（SYS 續閃，不進飛控）——電源重置可再測一次。\r\n");
+    fflush(stdout);
     /* 停在原地：SYS 續閃 + 餵狗，確保「一次重啟＝一次測試」，不落入正常 FSM。 */
     for (;;) {
         sys_led_pump();
@@ -149,5 +148,6 @@ void PyroSelfTest_RunOnce(void)
         HAL_Delay(50);
     }
 }
-
 #endif /* FEATURE_PYRO_SELFTEST */
+
+#endif /* PYRO_SELFTEST_AVAILABLE */

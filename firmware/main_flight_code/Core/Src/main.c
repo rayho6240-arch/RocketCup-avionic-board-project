@@ -44,6 +44,9 @@
 #include "gs_lora_test.h"   /* 地面站 LoRa 通訊測試模組（UART2 命令 + 雙鏈路統計） */
 #include "uplink_cmd.h"     /* 上行手動開傘（FEATURE_UPLINK_DEPLOY 下編入；其餘為空） */
 #include "usb_device.h"     /* USB-CDC 初始化（FEATURE_USB_CDC 下啟用） */
+#include "usbd_cdc_if.h"    /* CDC_Transmit_FS（FEATURE_USB_DEBUG_LOG 下 printf 直通 USB 用） */
+#include "ack_proto.h"      /* 命令 ACK 幀 + ACK_OK/UNKNOWN/... 狀態碼（遠端指令回覆） */
+#include "uplink_text_proto.h" /* UPLINK_TEXT_MAX（遠端文字命令緩衝大小） */
 #include "vertical_filter.h" /* 垂直通道 3 狀態 Kalman（FEATURE_VFILTER 下於 FSM_Update 接線） */
 /* 版本資訊：版號為 board_config.h 的 FIRMWARE_VERSION（手動語意化版本）。
  * Makefile 建置前自動產生 build_version.h，補上 git 版次(FW_GIT) 與建置時間(FW_BUILD)；
@@ -244,6 +247,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_TIM4_Init(void);
+static void Servo_HoldLow(void);   /* 主傘舵機 PD14 開機拉低（無 PWM 訊號），部署時才輸出 */
 static void MX_ADC1_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_RTC_Init(void);
@@ -326,6 +330,9 @@ int main(void)
   MX_RNG_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  /* 主傘舵機 PD14 立即拉低：MX_TIM4_Init 的 MspPostInit 已把 PD14 設為 TIM4 AF，此處覆蓋為
+   * GPIO 輸出並拉低，確保開機到部署前腳位「完全無訊號」（部署時 Servo_DeployMain 才切回 AF）。 */
+  Servo_HoldLow();
   setvbuf(stdout, NULL, _IONBF, 0);   /* 關閉 stdout 緩衝，使所有 FreeRTOS 任務的 printf 立即送往 UART，防慢速任務因獨立 reent 結構積壓不印 */
   HAL_Delay(500);   /* 延遲 500ms 讓 USB-TTL 串口驅動在 MCU 重置後有時間穩定，防止 PC 端漏字 */
   /* 開機橫幅：版本 + 角色，重複三次（剛接上序列埠/雜訊環境也至少看得到一次）。 */
@@ -1645,8 +1652,8 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : RST_GPS_Pin */
   GPIO_InitStruct.Pin = RST_GPS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_GPS_GPIO_Port, &GPIO_InitStruct);
 
@@ -1705,7 +1712,48 @@ static void MX_GPIO_Init(void)
 int _write(int file, char *ptr, int len)
 {
   (void)file;
-#if FEATURE_LINK
+#if FEATURE_USB_DEBUG_LOG
+  /* 台面除錯開關（board_config.h）：printf 改走 USB-CDC 虛擬序列埠，免接 SWD 除錯器、
+   * 免佔用被板間鏈路用掉的 USART2。飛行前務必把 FEATURE_USB_DEBUG_LOG 改回 0。
+   *
+   * 串行化：與 UART 分支共用 g_uart_printf_mutex。缺此鎖時多任務會同時呼叫 CDC_Transmit_FS
+   * 覆寫同一顆 TX 緩衝，輸出交錯、字元層級毀損。
+   * 非同步安全：CDC 傳輸經 IN 端點中斷背景完成，傳輸期間讀取的是我們給的緩衝，故
+   *   (1) 先等前一筆傳完（CDC_TxBusy 清）才可覆寫共用靜態緩衝；
+   *   (2) 複製 ptr 到靜態緩衝再送，避免 newlib 於傳輸中覆寫呼叫端 ptr。
+   * best-effort：PC 未讀取（TxState 卡住）時逾 5ms 放棄該段，不阻塞飛控路徑。
+   * RTOS 未啟動前（USB 尚未列舉、osDelay 不可用）直接略過。 */
+  /* 行組裝：stdout 無緩衝 → 一次 printf 拆成多次 _write 片段。若逐片段送 USB，USB-FS 每
+   * ~1ms 只能推一個 64B 封包，片段撞 TxBusy 被丟 → 半行掉字。改為在此累積到換行才整行送出：
+   *   送 → 送整行；丟 → 丟整行（PC 未讀時），輸出乾淨可讀。
+   * 完全不阻塞（絕不 osDelay/忙等）：本函式亦由「餵看門狗」的 StartDefaultTask 呼叫，任何忙等
+   * 都會在 PC 未讀（TxState 卡住）時逐行累積延遲 → 撐爆 IWDG(2.05s) → MCU 重置（先前症狀）。
+   * s_usb_line 累積中的行、s_usb_tx 送出用（CDC 非同步傳輸期間讀取的是它，須與累積緩衝分開，
+   * 且僅在 !TxBusy＝前一筆已送完時覆寫）。g_uart_printf_mutex 串行化多任務對這組共用緩衝的存取。 */
+  #define USB_LOG_LINE_MAX 256U
+  static uint8_t  s_usb_line[USB_LOG_LINE_MAX];
+  static uint16_t s_usb_line_len = 0;
+  static uint8_t  s_usb_tx[USB_LOG_LINE_MAX];
+  if (g_uart_printf_mutex != NULL &&
+      osKernelGetState() == osKernelRunning &&
+      __get_IPSR() == 0U) {
+    osMutexAcquire(g_uart_printf_mutex, osWaitForever);
+    for (int i = 0; i < len; i++) {
+      uint8_t c = (uint8_t)ptr[i];
+      if (s_usb_line_len < USB_LOG_LINE_MAX) {
+        s_usb_line[s_usb_line_len++] = c;
+      }
+      if (c == (uint8_t)'\n' || s_usb_line_len >= USB_LOG_LINE_MAX) {
+        if (!CDC_TxBusy()) {                       /* 前一筆已送完才送（否則丟整行，不等待） */
+          memcpy(s_usb_tx, s_usb_line, s_usb_line_len);
+          CDC_Transmit_FS(s_usb_tx, s_usb_line_len);
+        }
+        s_usb_line_len = 0;                        /* 送出或丟棄後都清空，開始下一行 */
+      }
+    }
+    osMutexRelease(g_uart_printf_mutex);
+  }
+#elif FEATURE_LINK
   /* USART2 已作板間鏈路；printf 改走 SWO/ITM（需 SWD/SWV 觀看；無除錯器時 ITM_SendChar
    * 自動略過、不阻塞）。如需回復 USART2 文字除錯橋，建置時設 -DFEATURE_LINK=0。 */
   for (int i = 0; i < len; i++) {
@@ -1724,6 +1772,36 @@ int _write(int file, char *ptr, int len)
   }
 #endif
   return len;
+}
+
+/* === 主傘舵機 PD14/TIM4_CH3：開傘前硬體拉低、無任何訊號；部署瞬間才切 AF 輸出 PWM ===
+ * 安全需求：MspPostInit 開機把 PD14 設為 TIM4 AF，PWM 未 start 時腳位狀態不保證為低。
+ * 故開機以 Servo_HoldLow() 覆蓋為 GPIO 輸出並拉低（TIM4 CH3 不 start）；部署時 Servo_DeployMain()
+ * 才切回 AF、啟動 PWM 並轉到 180°。1MHz tick → 脈寬 µs 值；50Hz 幀（TIM4 Period=19999）。 */
+#define SERVO_DEPLOY_US   2500U   /* 180°（同 pyro_selftest.h 的 PYRO_SELFTEST_SERVO_180DEG_US） */
+
+static void Servo_HoldLow(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin   = PWM_Servo_Pin;
+    gi.Mode  = GPIO_MODE_OUTPUT_PP;
+    gi.Pull  = GPIO_NOPULL;
+    gi.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);
+    HAL_GPIO_WritePin(PWM_Servo_GPIO_Port, PWM_Servo_Pin, GPIO_PIN_RESET);   /* 硬體低、無訊號 */
+}
+
+static void Servo_DeployMain(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin       = PWM_Servo_Pin;
+    gi.Mode      = GPIO_MODE_AF_PP;
+    gi.Pull      = GPIO_NOPULL;
+    gi.Speed     = GPIO_SPEED_FREQ_LOW;
+    gi.Alternate = GPIO_AF2_TIM4;
+    HAL_GPIO_Init(PWM_Servo_GPIO_Port, &gi);                                  /* 切回 TIM4 AF */
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, SERVO_DEPLOY_US);            /* 先定 180° 脈寬 */
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);                                 /* 再啟 PWM 輸出 */
 }
 
 /* === FSM 包裝層（P0-A）：純邏輯已抽離至 fsm.c/h，由 tests/test_fsm.c 驗證 ===
@@ -1852,43 +1930,20 @@ static void FSM_Update(void)
 
     FSM_Action_t act = FSM_Step(&g_fsm_ctx, &in);
 
-    /* --- 1. 硬體動作（先於任何列印） --- */
-#if (IS_BACKUP && FEATURE_LINK)
-    /* 備援航電（不對稱冗餘）：自身 FSM 照常運算並推進狀態，但點火/部署輸出受閘控——
-     * 已收到主板開傘通知（鎖存）即抑制（共用點火頭，主板已點）；未收到則等
-     * BACKUP_GRACE_MS 後自行補點（主板漏點 / 失聯 / 死亡）。release/buzzer 照常輸出
-     * （自身未點火時 release 為無動作）。 */
-    {
-        static BackupGate_t s_drogue_gate, s_main_gate;
-        static uint8_t s_gate_init = 0U;
-        if (!s_gate_init) {
-            BackupGate_Init(&s_drogue_gate);
-            BackupGate_Init(&s_main_gate);
-            s_gate_init = 1U;
-        }
-        const LinkPeer_t *peer = Link_GetPeer();
-
-        if (BackupGate_Step(&s_drogue_gate, act.fire_drogue, peer->drogue_latched, now, BACKUP_GRACE_MS)) {
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 補啟動副傘 DC 馬達（主板未開傘）
-        }
-        if (act.release_drogue) {
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 自身馬達限時導通保護：斷開
-        }
-        if (BackupGate_Step(&s_main_gate, act.deploy_main, peer->main_latched, now, BACKUP_GRACE_MS)) {
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 補部署主傘舵機（主板未部署）
-        }
-    }
-#else
+    /* --- 1. 硬體動作（先於任何列印） ---
+     * 對稱獨立：主/副兩板跑同一份 FSM、同一組輸出，各自依自身感測器獨立開傘。
+     * 副傘 DC 馬達＝PD13（簡單 GPIO，導通 FSM_DROGUE_MOTOR_RUN_MS）；主傘舵機＝PD14/
+     * TIM4_CH3，平時硬體拉低、無任何訊號（見 Servo_HoldLow），部署瞬間才切 AF 輸出
+     * PWM 到 180°（Servo_DeployMain）。 */
     if (act.fire_drogue) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);    // 啟動副傘 DC 馬達
+        HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_SET);    // 啟動副傘 DC 馬達（PD13）
     }
     if (act.release_drogue) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);  // 馬達限時導通保護：斷開
+        HAL_GPIO_WritePin(FIRE_GPIO_Port, FIRE_Pin, GPIO_PIN_RESET);  // 馬達限時導通保護：斷開
     }
     if (act.deploy_main) {
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);     // 主傘釋放舵機（釋放角度）
+        Servo_DeployMain();   // PD14 切 AF + 啟 PWM + CCR=SERVO_DEPLOY_US(180°)
     }
-#endif
 
 #if FEATURE_UPLINK_DEPLOY
     /* 上行手動開傘（地面站 433 命令，uplink_cmd 已經 ARM→DEPLOY 兩段式驗證）。
@@ -1906,7 +1961,7 @@ static void FSM_Update(void)
                 s_man_drogue_tick   = now;
             }
             if (man_main) {
-                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 2000);          // 手動主傘舵機釋放角度
+                Servo_DeployMain();   // 手動主傘：PD14 切 AF + 啟 PWM + 轉 180°（同自動部署）
             }
         }
         /* 手動副傘導通限時保護：FSM_DROGUE_MOTOR_RUN_MS 後斷開馬達（同 FSM 自身馬達限時）。 */
@@ -1999,6 +2054,16 @@ static void FSM_Update(void)
 }
 
 #if FEATURE_LINK
+/* 對端 fsm_state（FlightState_t 數值）→ 簡短字串，供 [LINK] 診斷行輸出（GUI 監控用）。 */
+static const char *link_fsm_state_name(uint8_t s)
+{
+    static const char *const names[] = {
+        "INIT", "PAD", "BOOST", "COAST", "DEP_DROGUE",
+        "APOGEE", "DESCENT", "MAIN_DEPLOY", "LANDED"
+    };
+    return (s < (sizeof(names) / sizeof(names[0]))) ? names[s] : "UNK";
+}
+
 /* === 板間鏈路：自身狀態組裝 + 週期廣播 === */
 static void Link_BuildOwnStatus(LinkStatus_t *ls)
 {
@@ -2197,6 +2262,35 @@ void LoRaTelemetry_Task(void *argument)
             }
         }
 
+#if FEATURE_UPLINK_DEPLOY
+        /* === 命令 ACK 下行（主航電）====================================================
+         * 診斷任務執行完上行命令後經 UplinkCmd_SetAck 暫存一筆 ACK；此處取出並組 ack_proto 幀，
+         * 於接下來數個時槽經 433(E22)+920(E80) 各重送 ACK_TX_REPEAT 次（滿足「多傳幾次」，
+         * 對抗空中誤碼/漏收）。ACK 幀為單一連續位元組序列、與遙測封包在本任務內序列化送出，
+         * 不會 byte 交錯（地面站以 AckRx 於同一位元組流並排解析，sync 0xAC/0xCA 與遙測區隔）。 */
+        {
+            #define ACK_TX_REPEAT  4U
+            static uint8_t  s_ack_frame[ACK_FRAME_MAX];
+            static uint8_t  s_ack_frame_len = 0;
+            static uint8_t  s_ack_repeat = 0;
+            if (s_ack_repeat == 0U) {
+                uint8_t aseq = 0, astatus = 0, alen = 0;
+                char    atext[ACK_TEXT_MAX + 1];
+                if (UplinkCmd_TakePendingAck(&aseq, &astatus, atext, &alen)) {
+                    s_ack_frame_len = AckProto_Build(s_ack_frame, aseq, astatus, atext, alen);
+                    s_ack_repeat    = ACK_TX_REPEAT;
+                    printf("[ACK_TX] seq=%u status=%s cmd=\"%s\" ×%u\r\n",
+                           (unsigned)aseq, ack_status_str(astatus), atext, (unsigned)ACK_TX_REPEAT);
+                }
+            }
+            if (s_ack_repeat > 0U && s_ack_frame_len > 0U) {
+                if (lora433_ok) LoRaE22_Send(s_ack_frame, s_ack_frame_len);   /* 忙線跳過；靠重送命中 */
+                if (lora920_ok) LoRaE80_Send(s_ack_frame, s_ack_frame_len);
+                s_ack_repeat--;
+            }
+        }
+#endif /* FEATURE_UPLINK_DEPLOY */
+
         slot++;
         wake += LORA_TELEM_PERIOD_MS;
         osDelayUntil(wake);
@@ -2206,6 +2300,7 @@ void LoRaTelemetry_Task(void *argument)
 #if defined(ENABLE_DIAGNOSTICS) && !IS_GROUND
 void Poll_Serial_Commands(void);
 void Parse_Serial_Command(const char* cmd);
+uint8_t Parse_GetLastStatus(void);   /* Parse_Serial_Command 最後結果（ACK_*，見定義處） */
 
 void StartDiagnosticTask(void *argument)
 {
@@ -2216,6 +2311,40 @@ void StartDiagnosticTask(void *argument)
   {
 #if !FEATURE_LINK
       Poll_Serial_Commands();   /* USART2 文字命令台；FEATURE_LINK 時 USART2 改作板間鏈路 */
+#endif
+
+#if FEATURE_UPLINK_DEPLOY
+      /* === 遠端 433 上行命令執行（主航電）===================================
+       * 文字命令：餵 Parse_Serial_Command（複用整組本地命令：mag 校正/e22/e80/role…），
+       *   結果經 Parse_GetLastStatus 取回 → SetAck 回地面站。指令執行的 printf 同時走火箭
+       *   自身 USB CDC（FEATURE_USB_DEBUG_LOG 開啟時），即「ack 給 usb」。
+       * bench（桌面測試）：已過 uplink_cmd 的 ARM 閘；此處再加「僅限未起飛」閘
+       *   （STATE_PAD/INIT）——序列含 PD13 點火頭導通 8s + 舵機掃動，飛行中觸發會災難性。
+       *   通過 → 跑一次 PyroSelfTest_RunSequence()（阻塞 ~25s，自身餵狗；飛控 1kHz 任務照常
+       *   搶佔），返回後 Servo_HoldLow() 復位 PD14 為部署前安全低態，回歸正常 FSM，回 ACK。 */
+      {
+          char     ucmd[UPLINK_TEXT_MAX + 1];
+          uint8_t  useq = 0;
+          if (UplinkCmd_TakeTextCmd(ucmd, sizeof(ucmd), &useq)) {
+              Parse_Serial_Command(ucmd);
+              UplinkCmd_SetAck(useq, Parse_GetLastStatus(), ucmd);
+          }
+          uint8_t bseq = 0;
+          if (UplinkCmd_TakeBench(&bseq)) {
+              FlightState_t st = (FlightState_t)current_fsm_state;
+              if (st == STATE_INIT || st == STATE_PAD) {
+                  printf("[BENCH] 遠端桌面測試觸發（已過 ARM+未起飛閘）→ 跑一次 pyro/servo 序列\r\n");
+                  PyroSelfTest_RunSequence();
+                  Servo_HoldLow();   /* 復位 PD14 為部署前安全低態（無訊號） */
+                  printf("[BENCH] 序列完成，已回歸正常 FSM。\r\n");
+                  UplinkCmd_SetAck(bseq, ACK_OK, "bench");
+              } else {
+                  printf("[BENCH] 拒絕：已起飛（fsm=%u），bench 僅限發射架上。\r\n",
+                         (unsigned)current_fsm_state);
+                  UplinkCmd_SetAck(bseq, ACK_REJECTED, "bench");
+              }
+          }
+      }
 #endif
 
       if (tick % 50 == 0) {
@@ -2236,6 +2365,25 @@ void StartDiagnosticTask(void *argument)
                  (int)GPS_IsStale(2000),
                  (unsigned long)g->sentences_ok,
                  (unsigned long)g->sentences_err);
+
+#if FEATURE_LINK
+          /* 2. 板間鏈路溝通狀態（1Hz）：自身角色/對端角色/鏈路是否新鮮/對端最近回報的
+           * FSM 狀態與旗標/距上次收包時間。GUI 監控（USB）據此顯示主備兩板的溝通狀態；
+           * 對稱獨立冗餘設計下鏈路不再仲裁點火（各板獨立判斷），純供人工監看/事後判讀。 */
+          {
+              uint32_t now_link = HAL_GetTick();
+              const LinkPeer_t *peer = Link_GetPeer();
+              uint8_t fresh = Link_PeerFresh(now_link);
+              const char *link_state = !peer->valid ? "NONE" : (fresh ? "OK" : "STALE");
+              printf("[LINK] self=%s peer=%s link=%s state=%s flags=0x%02X age=%lums\r\n",
+                     IS_BACKUP ? "BACKUP" : "PRIMARY",
+                     !peer->valid ? "NONE" : ((peer->board_id == LINK_BOARD_BACKUP) ? "BACKUP" : "PRIMARY"),
+                     link_state,
+                     link_fsm_state_name(peer->fsm_state),
+                     peer->flags,
+                     (unsigned long)(peer->valid ? (now_link - peer->last_rx_ms) : 0U));
+          }
+#endif
 
 #ifdef RATE_MONITOR_ENABLE
           // 3. 採樣率遙測
@@ -2389,7 +2537,13 @@ static void cmd_print_help(void)
            "===========================================\r\n");
 }
 
+/* 最後一筆命令解析結果（ACK_OK/ACK_BADARG/ACK_UNKNOWN，見 ack_proto.h）：Parse_Serial_Command
+ * 進入時預設 OK，僅失敗分支覆寫；供遠端 433 文字命令的 ACK 判斷（診斷任務讀取）。 */
+static uint8_t g_parse_status = ACK_OK;
+uint8_t Parse_GetLastStatus(void) { return g_parse_status; }
+
 void Parse_Serial_Command(const char* cmd) {
+    g_parse_status = ACK_OK;
     if (strncmp(cmd, "CMD_MAG_CAL:", 12) == 0) {
         /* 整數 raw ADC counts（非浮點）：nano.specs 連結不支援浮點 sscanf/printf，
          * %f 這裡會靜默解析失敗（同一根因見昨天修的 8 處 printf("%f")）。硬鐵
@@ -2400,6 +2554,7 @@ void Parse_Serial_Command(const char* cmd) {
             EKF_SaveMagCalibration((float)cx, (float)cy, (float)cz);
         } else {
             printf("[CAL] ERROR: Invalid mag cal command format (expect integer raw ADC counts)\r\n");
+            g_parse_status = ACK_BADARG;
         }
         return;
     }
@@ -2408,6 +2563,8 @@ void Parse_Serial_Command(const char* cmd) {
         if (sscanf(cmd + 17, "%d", &val) == 1) {
             g_mag_yaw_lock = (val != 0) ? 1 : 0;
             printf("[CAL] EKF Mag Yaw Lock set to: %d\r\n", g_mag_yaw_lock);
+        } else {
+            g_parse_status = ACK_BADARG;
         }
         return;
     }
@@ -2460,6 +2617,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint8_t  ch  = 0;
             if (!e22_mhz_to_ch(mhz, &ch)) {
                 printf("[E22] freq 範圍 410-493 MHz\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2472,6 +2630,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint32_t lvl = (uint32_t)strtoul(tok[2], NULL, 10);
             if (lvl > 3U) {
                 printf("[E22] pwr 等級 0=30dBm 1=27dBm 2=24dBm 3=21dBm（3V3 供電建議 3）\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2483,6 +2642,7 @@ void Parse_Serial_Command(const char* cmd) {
             uint32_t ar = (uint32_t)strtoul(tok[2], NULL, 10);
             if (ar > 7U) {
                 printf("[E22] air 速率 0=0.3k 1=1.2k 2=2.4k 3=4.8k 4=9.6k 5=19.2k 6=38.4k 7=62.5k\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_lora_pause();
@@ -2492,6 +2652,7 @@ void Parse_Serial_Command(const char* cmd) {
             else              printf("[E22] air rate set FAIL (st=%d)\r\n", (int)st);
         } else {
             printf("[E22] 未知子命令，輸入 help\r\n");
+            g_parse_status = ACK_UNKNOWN;
         }
 
     } else if (strcmp(tok[0], "e80") == 0 && n >= 2) {
@@ -2507,29 +2668,31 @@ void Parse_Serial_Command(const char* cmd) {
             cmd_e80_reconfig(hz, sf, bw, cr, pwr, pre);
         } else if (strcmp(tok[1], "sf") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
-            if (v < 7U || v > 12U) { printf("[E80] SF 範圍 7-12\r\n"); return; }
+            if (v < 7U || v > 12U) { printf("[E80] SF 範圍 7-12\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, (uint8_t)v, bw, cr, pwr, pre);
         } else if (strcmp(tok[1], "bw") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
             if (v > 0xFFU || !lora_bw_valid((uint8_t)v)) {
                 printf("[E80] BW idx 合法值: 0 1 2 3 4(125k) 5(250k) 6(500k) 8 9 10\r\n");
+                g_parse_status = ACK_BADARG;
                 return;
             }
             cmd_e80_reconfig(f, sf, (uint8_t)v, cr, pwr, pre);
         } else if (strcmp(tok[1], "cr") == 0 && n >= 3) {
             uint32_t v = (uint32_t)strtoul(tok[2], NULL, 10);
-            if (v < 1U || v > 4U) { printf("[E80] CR 範圍 1-4\r\n"); return; }
+            if (v < 1U || v > 4U) { printf("[E80] CR 範圍 1-4\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, (uint8_t)v, pwr, pre);
         } else if (strcmp(tok[1], "pwr") == 0 && n >= 3) {
             int v = atoi(tok[2]);
-            if (v < -9 || v > 22) { printf("[E80] pwr 範圍 -9~22 dBm\r\n"); return; }
+            if (v < -9 || v > 22) { printf("[E80] pwr 範圍 -9~22 dBm\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, cr, (int8_t)v, pre);
         } else if (strcmp(tok[1], "pre") == 0 && n >= 3) {
             long v = atol(tok[2]);
-            if (v < 6 || v > 65535) { printf("[E80] preamble 6~65535\r\n"); return; }
+            if (v < 6 || v > 65535) { printf("[E80] preamble 6~65535\r\n"); g_parse_status = ACK_BADARG; return; }
             cmd_e80_reconfig(f, sf, bw, cr, pwr, (uint16_t)v);
         } else {
             printf("[E80] 未知子命令，輸入 help\r\n");
+            g_parse_status = ACK_UNKNOWN;
         }
 #else
     } else if (strcmp(tok[0], "e22") == 0 || strcmp(tok[0], "e80") == 0) {
@@ -2543,6 +2706,7 @@ void Parse_Serial_Command(const char* cmd) {
         }
     } else {
         printf("[CMD] 未知命令 '%s'，輸入 help\r\n", tok[0]);
+        g_parse_status = ACK_UNKNOWN;
     }
 }
 
